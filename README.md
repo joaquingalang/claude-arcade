@@ -196,19 +196,26 @@ CLI holds the same line - `ensureApp()` returning null means "run Claude unwrapp
 | `newtons-cradle` | drag a ball out and release | never - on the clock |
 | `falling-sand` | drag to pour; it piles and avalanches | never - on the clock |
 | `rain-stick` | drag to tip it; the beads pour and clatter | never - on the clock |
-| `thumb-piano` | sweep across the tines to pluck them | never - on the clock |
+| `thumb-piano` | press a tine, or drag across them to play a run | never - on the clock |
 | `snake` | arrow keys, or point where you want it to go | 3 lives spent |
 | `flappy-bird` | click to flap | 3 lives spent |
 | `pong` | move the pointer to slide your paddle | someone reaches 5 |
-| `simon` | click the pads back in the order they flashed | a wrong pad, or 8 rounds |
+| `simon` | click to start, then the pads back in the order they flashed | a wrong pad, 8 rounds, or never started |
 | `suika` | point to aim, click to drop; same fruit fuse | the basket empties, or the jar overflows |
 | `space-invaders` | the pointer steers; the ship fires itself | 2 waves cleared, or 3 lives |
 
 The fidget toys are driven by the pointer alone, because the window never has keyboard
-focus. Snake, Pong, Simon, Suika and Space Invaders play themselves until you touch them -
-a toy that sits still until instructed is a chore. Suika's autopilot aims at whatever the
-queued fruit could merge with and ignores everything else, which is deliberately mediocre
-play: a demo that never loses would be a demo you have to watch.
+focus. Snake, Pong, Suika and Space Invaders play themselves until you touch them - a toy
+that sits still until instructed is a chore. Suika's autopilot aims at whatever the queued
+fruit could merge with and ignores everything else, which is deliberately mediocre play: a
+demo that never loses would be a demo you have to watch.
+
+Simon is the exception, and it has to be: a memory game cannot demo itself. A sequence
+flashing at someone who is not watching is a round they have already lost by the time they
+look up, and one being answered by an autopilot is a round they were never offered. So the
+board breathes quietly with a play mark in the hub and nothing happens until you click it -
+and because a game is exempt from the cycle clock, a board nobody starts gives up after
+fifteen seconds and hands over rather than holding the rotation all day.
 
 ### Playing one on purpose
 
@@ -263,7 +270,7 @@ beeps while you are on a call is a toy you uninstall. It is also what decided Si
 shape - Simon is the rare memory game where the tone duplicates the colour rather than
 carrying half the information, so it plays correctly with nothing to hear.
 
-Three widgets make a noise, and they split two ways.
+Four widgets make a noise, and they split two ways.
 
 **Bubble wrap plays samples**, because popping is the interaction where the sound *is* the
 point and a real pop is full of detail no oscillator will reproduce. Drop four files named
@@ -272,19 +279,27 @@ README in that directory for what makes a good sample. Missing files are not an 
 is loaded independently and failures are skipped, so an install with no samples pops
 silently rather than breaking.
 
-**The rain stick and thumb piano synthesise**, and that is a deliberate split rather than
-an inconsistency. The thumb piano's pitches *are* the toy, so a missing sample set would
-not make it duller, it would make it pointless - and seven tuned files is a lot to ask
+**The rain stick, thumb piano and Simon synthesise**, and that is a deliberate split rather
+than an inconsistency. The thumb piano's pitches *are* the toy, so a missing sample set
+would not make it duller, it would make it pointless - and seven tuned files is a lot to ask
 before anything can be heard at all. Synthesis makes it correct by construction and audible
-the moment sound is switched on. The rain stick follows because a bead striking a baffle is
-a band-passed noise transient with a 30ms decay, which is nearly everything there is to say
-about it.
+the moment sound is switched on. Simon follows for the same reason with four tuned pitches
+instead of seven. The rain stick follows because a bead striking a baffle is a band-passed
+noise transient with a 30ms decay, which is nearly everything there is to say about it.
+
+Simon's pads are the original toy's four pitches - A3, C♯4, E4 and A4, an A major chord -
+played on a lowpassed square that lands somewhere near the plastic buzzer they came from. A
+playback flash and its tone start and stop together, because the tone is a copy of the light
+rather than half of it; a press sounds the pad it pressed; a wrong pad and a run left to
+time out both get the same low blat, since they are the same ending. Winning gets the four
+pads back in a rising arpeggio. None of it carries anything the colours do not, which is
+what keeps the game whole with sound off - the default.
 
 Turn it all on with `"soundEnabled": true` in `config.json`; the flag is read on every
 appearance, so the edit lands on the next show rather than the next launch.
 
 The thumb piano is tuned to a **major pentatonic** scale, and that is load-bearing rather
-than a taste call. Its tines are plucked in whatever order a pointer happens to cross them,
+than a taste call. Its tines are plucked in whatever order a dragged pointer crosses them,
 so every interval the scale admits gets played constantly, by accident. Pentatonic has no
 semitones and no tritone, which is exactly the property that makes each of those accidents
 consonant. It is also what let the tines keep their traditional layout - a real kalimba runs
@@ -373,9 +388,10 @@ a timer wastes the time it was meant to fill.
 The flip side is that a game has to actually end, and each one carries its own escalation
 to make sure it does. Pong's ball gains speed on every paddle hit *and* carries that into
 the next serve. The invader fleet marches faster the fewer of them are left, so the last
-one alive is the hard one. Simon is the awkward case - it can end by being *ignored* - so a
-run that is waiting for a press that never comes gives up after a few seconds rather than
-sitting there all day.
+one alive is the hard one. Simon is the awkward case - it can end by being *ignored* - so
+both of its waits are bounded: a board that is never started hands over after fifteen
+seconds, and a run waiting for a press that never comes gives up after a few, rather than
+either sitting there all day.
 
 Suika is the case where that had to be *measured* rather than assumed. The original is
 endless-until-you-lose, and it looked like the jar filling up was ending enough - but two

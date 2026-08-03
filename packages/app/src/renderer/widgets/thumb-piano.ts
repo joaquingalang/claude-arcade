@@ -9,6 +9,11 @@ import { CanvasWidget } from './types';
  * the opposite case on purpose - silent it is a row of springy tines worth flicking, and
  * with sound on it is an instrument you can actually pick something out on.
  *
+ * It sounds under a held pointer only - press to strike one tine, drag across to play a
+ * phrase. Bubble wrap pops on a bare hover and this deliberately does not: a pop is a
+ * one-shot, but a pointer crossing the board on its way somewhere else would fire off a
+ * run of notes nobody asked for, and there is no way to take those back.
+ *
  * The tines keep the traditional layout - lowest in the middle, alternating outwards - so
  * left to right is not a scale. That only works because the tuning is pentatonic: every
  * interval a stray pointer can produce is consonant, so a sweep across the whole board
@@ -69,6 +74,8 @@ export class ThumbPiano extends CanvasWidget {
   private tines: Tine[] = [];
   /** The tine the pointer is currently over, so holding still does not machine-gun it. */
   private onTine = -1;
+  /** True between pointer down and up. Nothing sounds unless the button is held. */
+  private pressed = false;
   private lastX: number | null = null;
   private time = 0;
 
@@ -78,6 +85,7 @@ export class ThumbPiano extends CanvasWidget {
 
   protected init(): void {
     this.onTine = -1;
+    this.pressed = false;
     this.lastX = null;
     this.time = 0;
     this.tines = Array.from({ length: COUNT }, (_, i) => {
@@ -248,19 +256,28 @@ export class ThumbPiano extends CanvasWidget {
   }
 
   override onPointerDown(x: number, y: number): void {
+    this.pressed = true;
     // Cleared first so tapping the same tine twice sounds twice.
     this.onTine = -1;
     this.lastX = x;
     this.touch(x, y);
   }
 
-  /** Hovering across the board plays it, the same way hovering pops bubble wrap. */
+  /**
+   * Dragging a held pointer across the board plays it.
+   *
+   * The press is what separates playing from passing through: one gesture covers both a
+   * tap on a single tine and a glissando across all seven, and a pointer merely crossing
+   * the widget stays silent. See the class comment.
+   */
   override onPointerMove(x: number, y: number): void {
+    if (!this.pressed) return;
     this.touch(x, y);
     this.lastX = x;
   }
 
   override onPointerUp(): void {
+    this.pressed = false;
     this.onTine = -1;
     this.lastX = null;
   }

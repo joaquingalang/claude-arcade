@@ -1,3 +1,4 @@
+import { buzzer } from '../audio';
 import { CanvasWidget } from './types';
 
 /** Four pads, arranged as quadrants of a ring. More would be unreadable at 280px. */
@@ -40,11 +41,38 @@ const PATIENCE = 4;
 /** How long the result is held before handing over, so the run has an ending. */
 const OVER_PAUSE = 1.7;
 
-/** Seconds between the autopilot's presses while nobody has touched it. */
-const AUTO_PRESS = 0.32;
+/**
+ * Seconds a board that has never been touched waits before handing over.
+ *
+ * A game is exempt from the cycle clock, so one that waits to be started has to give up
+ * by itself or it holds the rotation for the rest of the day. Matched to the toys' default
+ * cycle: a game nobody chose to play should take no more of the screen than a toy does.
+ */
+const IDLE_PATIENCE = 15;
+
+/**
+ * The waiting board: a slow breath across the four pads, and how far each pad lags the
+ * one before it so the breath travels round the ring rather than pulsing as one block.
+ *
+ * Deliberately dimmer than anything playback does. A board that is waiting has to look
+ * unmistakably unlike a board that is showing you something to memorise.
+ */
+const IDLE_GLOW = 0.14;
+const IDLE_BREATHE = 0.1;
+const IDLE_RATE = 1.5;
+const IDLE_LAG = 0.6;
 
 /** How fast a pad's glow falls away once it is no longer held lit. */
 const GLOW_DECAY = 9;
+
+/**
+ * How long a pressed pad sounds for, in seconds.
+ *
+ * Playback tones are as long as their flash, but a press has no length of its own - the
+ * widget only ever hears the pointer go down. Short enough that hammering four pads in a
+ * second stays four notes rather than a chord.
+ */
+const PRESS_TONE = 0.19;
 
 const GEOMETRY = {
   /** Inner and outer radius of the pad ring, as fractions of the box. */
@@ -62,7 +90,7 @@ const COLOURS = [
   { base: '59,130,246', lit: '147,197,253' }, // blue
 ] as const;
 
-type Phase = 'showing' | 'input' | 'pause' | 'over';
+type Phase = 'idle' | 'showing' | 'input' | 'pause' | 'over';
 type Result = 'win' | 'loss' | null;
 
 /**
@@ -71,16 +99,21 @@ type Result = 'win' | 'loss' | null;
  * The only memory game in the set, and the only one that works with no audio at all -
  * which is the constraint that decided it. A desk toy that beeps while you are on a call
  * is a toy you uninstall, and Simon is the rare game where the sound is a duplicate of
- * the picture rather than half the information.
+ * the picture rather than half the information. Every pad has a tone and nothing else
+ * does: with sound on you can play it looking away, and with sound off you lose nothing.
+ * The four pitches are the original toy's, and they are an A major chord - see `PAD_HZ`
+ * in `../audio` for why that is not nostalgia.
  *
- * It plays itself until you touch it, like Snake and Pong: an untouched Simon that flashes
- * one pad and then sits waiting forever would be a still frame with a timeout attached.
- * Once you have pressed a pad the autopilot is gone for the rest of the run and the
- * patience timer is what ends it if you wander off.
+ * Unlike Snake, Pong and the rest, it does not start itself. Those play themselves because
+ * a still board reads as broken, and Simon cannot borrow that trick: a sequence flashing
+ * at someone who is not watching is a round they have already lost by the time they look
+ * up, and one being answered by an autopilot is a round they were never offered. So the
+ * board waits, breathing, until it is pressed - and a board nobody presses gives up after
+ * `IDLE_PATIENCE` rather than holding the rotation forever.
  */
 export class Simon extends CanvasWidget {
   private sequence: number[] = [];
-  private phase: Phase = 'pause';
+  private phase: Phase = 'idle';
   private result: Result = null;
   /** Rounds reproduced in full. In Simon the sequence length is the score. */
   private score = 0;
@@ -95,9 +128,8 @@ export class Simon extends CanvasWidget {
   private waitTimer = 0;
   private patience = 0;
   private overTimer = 0;
-  private autoTimer = 0;
-  /** True until the first press. See the class comment. */
-  private auto = true;
+  /** Counts down while the board is waiting to be started. See the class comment. */
+  private idleTimer = 0;
   private time = 0;
 
   private cx = 0;
@@ -115,10 +147,11 @@ export class Simon extends CanvasWidget {
     this.result = null;
     this.score = 0;
     this.overTimer = 0;
-    this.auto = true;
+    this.lit = null;
     this.time = 0;
-    // Straight into a playback: the first flash should be on screen as the window fades in.
-    this.extend();
+    // Waiting, not playing. Nothing flashes until someone asks for a sequence.
+    this.phase = 'idle';
+    this.idleTimer = IDLE_PATIENCE;
   }
 
   /** Add a step and show the whole sequence from the top, as the real toy does. */
@@ -148,9 +181,20 @@ export class Simon extends CanvasWidget {
   private startPlayback(): void {
     this.phase = 'showing';
     this.step = 0;
+    this.flash(this.sequence[0] ?? 0);
+  }
+
+  /**
+   * Light a pad for one step of playback, and sound it for exactly as long as it is lit.
+   *
+   * The tone is a duplicate of the light rather than a second half of it - see the class
+   * comment - so the two have to start and stop together or the copy is a lie.
+   */
+  private flash(pad: number): void {
     this.showLit = true;
     this.showTimer = this.flashLength();
-    this.lit = this.sequence[0] ?? 0;
+    this.lit = pad;
+    buzzer.play(pad, this.showTimer);
   }
 
   private flashLength(): number {
@@ -162,6 +206,11 @@ export class Simon extends CanvasWidget {
     this.fadeGlow(dt);
 
     switch (this.phase) {
+      case 'idle':
+        this.idleTimer -= dt;
+        // Handing over unstarted, with no result: nobody lost a game they never began.
+        if (this.idleTimer <= 0) this.finish();
+        break;
       case 'showing':
         this.playback(dt);
         break;
@@ -207,37 +256,28 @@ export class Simon extends CanvasWidget {
       this.phase = 'input';
       this.step = 0;
       this.patience = PATIENCE;
-      this.autoTimer = AUTO_PRESS;
       return;
     }
-    this.showLit = true;
-    this.showTimer = this.flashLength();
-    this.lit = this.sequence[this.step]!;
+    this.flash(this.sequence[this.step]!);
   }
 
   private awaitPress(dt: number): void {
-    if (this.auto) {
-      this.autoTimer -= dt;
-      if (this.autoTimer <= 0) {
-        this.autoTimer = AUTO_PRESS;
-        this.press(this.sequence[this.step]!);
-      }
-      return;
-    }
-
     this.patience -= dt;
     if (this.patience <= 0) this.fail();
   }
 
-  /** Register a press of `pad`, from the player or from the autopilot. */
+  /** Register a press of `pad`. */
   private press(pad: number): void {
     if (this.phase !== 'input') return;
     this.glow[pad] = 1;
 
     if (pad !== this.sequence[this.step]) {
+      // No tone for the wrong pad: the blat is the answer, and sounding the pad first
+      // would give it half a beat of sounding correct.
       this.fail();
       return;
     }
+    buzzer.play(pad, PRESS_TONE);
 
     this.step++;
     this.patience = PATIENCE;
@@ -248,6 +288,7 @@ export class Simon extends CanvasWidget {
       this.result = 'win';
       this.phase = 'over';
       this.overTimer = 0;
+      buzzer.win();
       return;
     }
     this.phase = 'pause';
@@ -259,6 +300,9 @@ export class Simon extends CanvasWidget {
     this.phase = 'over';
     this.overTimer = 0;
     this.lit = null;
+    // Here rather than at the call sites, so a run that times out sounds like one that
+    // was answered wrong. Both are the same ending and there is nothing to distinguish.
+    buzzer.fail();
   }
 
   /** Which pad a point is on, or null for the hub, the gaps, or outside the ring. */
@@ -293,6 +337,9 @@ export class Simon extends CanvasWidget {
     let glow = this.glow[i]!;
     if (this.result === 'win') glow = 0.55 + 0.45 * Math.sin(this.time * 9 + i * 0.7);
     else if (this.result === 'loss') glow = 0;
+    else if (this.phase === 'idle') {
+      glow = IDLE_GLOW + IDLE_BREATHE * Math.sin(this.time * IDLE_RATE - i * IDLE_LAG);
+    }
 
     ctx.beginPath();
     ctx.arc(this.cx, this.cy, outer, start, end);
@@ -301,7 +348,9 @@ export class Simon extends CanvasWidget {
     ctx.fillStyle = `rgba(${colour.base},${0.26 + 0.62 * glow})`;
     ctx.fill();
 
-    if (glow <= 0.04) return;
+    // A waiting pad keeps to a flat wash. The inset arc is what a *flash* looks like, and
+    // lending it to the breath would make the idle board look like a sequence to copy.
+    if (this.phase === 'idle' || glow <= 0.04) return;
     // A brighter inset arc on top of the lit pad, so a flash is a change of shape as well
     // as of alpha - alpha alone is easy to miss against a busy desktop.
     const mid = (inner + outer) / 2;
@@ -314,7 +363,7 @@ export class Simon extends CanvasWidget {
   }
 
   /**
-   * The hub, carrying the length reached.
+   * The hub, carrying the length reached - or, before the run starts, the invitation.
    *
    * One digit is the most text this box can carry legibly, and it is the only number worth
    * having: in Simon the sequence length is the score.
@@ -332,6 +381,11 @@ export class Simon extends CanvasWidget {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    if (this.phase === 'idle') {
+      this.drawStartGlyph(r);
+      return;
+    }
+
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -342,6 +396,29 @@ export class Simon extends CanvasWidget {
   }
 
   /**
+   * A play triangle where the score will go, breathing with the pads.
+   *
+   * A drawn shape rather than a "start" label: the widget is 280px and the hub is a tenth
+   * of that, so any word small enough to fit is a word nobody reads. Nudged right of the
+   * true centre because a triangle's mass sits left of its bounding box - centred by the
+   * numbers it looks off-centre to the eye.
+   */
+  private drawStartGlyph(r: number): void {
+    const ctx = this.ctx;
+    const s = r * 0.62;
+    const x = this.cx + s * 0.16;
+
+    ctx.beginPath();
+    ctx.moveTo(x - s * 0.5, this.cy - s * 0.62);
+    ctx.lineTo(x + s * 0.62, this.cy);
+    ctx.lineTo(x - s * 0.5, this.cy + s * 0.62);
+    ctx.closePath();
+    const pulse = 0.62 + 0.22 * Math.sin(this.time * IDLE_RATE);
+    ctx.fillStyle = `rgba(241,245,249,${pulse})`;
+    ctx.fill();
+  }
+
+  /**
    * Press on the way down, not on the way up.
    *
    * A pad that lights on release feels like it missed the input, and on a widget this
@@ -349,11 +426,15 @@ export class Simon extends CanvasWidget {
    */
   override onPointerDown(x: number, y: number): void {
     if (this.phase === 'over') return;
-    // Any click at all is a person arriving, even one that lands in a gap. Leaving the
-    // autopilot running after that would have it answering over the top of them.
-    this.auto = false;
-    this.patience = PATIENCE;
 
+    // A waiting board is one big button: the click that starts the run is not a pad press,
+    // so where it lands cannot be wrong. There is nothing to be wrong about yet.
+    if (this.phase === 'idle') {
+      this.extend();
+      return;
+    }
+
+    this.patience = PATIENCE;
     const pad = this.padAt(x, y);
     if (pad === null) return;
     this.press(pad);

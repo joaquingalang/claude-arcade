@@ -11,14 +11,16 @@
  * overlap. Web Audio also gives per-voice `playbackRate`, which is what keeps a fast drag
  * from sounding like one sample on a loop.
  *
- * Two of the toys synthesise rather than sample, which is a deliberate split rather than
- * an inconsistency. Bubble wrap samples because a real pop is full of detail no oscillator
- * will reproduce, and because a missing file there costs polish and nothing else. The thumb
- * piano is the opposite case: its pitches *are* the toy, so a missing sample set would not
- * make it duller, it would make it pointless - and seven tuned files is a lot to ask before
- * anything can be heard. Synthesis makes it correct by construction and audible the moment
- * sound is switched on. The rain stick follows it because a bead striking a baffle is a
- * filtered noise transient, which is nearly all a synthesiser has to say.
+ * Everything but the bubble wrap synthesises rather than samples, which is a deliberate
+ * split rather than an inconsistency. Bubble wrap samples because a real pop is full of
+ * detail no oscillator will reproduce, and because a missing file there costs polish and
+ * nothing else. The thumb piano is the opposite case: its pitches *are* the toy, so a
+ * missing sample set would not make it duller, it would make it pointless - and seven
+ * tuned files is a lot to ask before anything can be heard. Synthesis makes it correct by
+ * construction and audible the moment sound is switched on. Simon follows for the same
+ * reason, four tuned files instead of seven. The rain stick follows because a bead
+ * striking a baffle is a filtered noise transient, which is nearly all a synthesiser has
+ * to say.
  */
 
 /** Copied verbatim out of `renderer/public/` at build time, so this path is stable. */
@@ -425,10 +427,149 @@ export class Beads extends Synth {
   }
 }
 
+/**
+ * Simon's four pad tones, in pad order: green, red, yellow, blue.
+ *
+ * The original toy's pitches, and like the thumb piano's pentatonic they are load-bearing
+ * rather than nostalgia. They spell an A major chord - A3, C#4, E4, A4 - so a sequence is
+ * consonant however the generator happens to land. That matters more here than anywhere
+ * else in the set: the tone is a second copy of the colour, meant to be memorised
+ * alongside it, and a sequence that sounds like a mistake is one you stop listening to.
+ */
+export const PAD_HZ = [329.63, 277.18, 440, 220];
+
+/**
+ * Loudest a pad tone gets.
+ *
+ * Under the pops, and deliberately: those are transients an ear barely registers, while
+ * this is a held tone, and a sustained square at pop level would be the loudest thing on
+ * the desktop.
+ */
+const PAD_GAIN = 0.16;
+/** Attack and release, in seconds. Enough to take the click off both ends of a tone. */
+const PAD_ATTACK = 0.012;
+const PAD_RELEASE = 0.07;
+/** Shortest a pad tone can be, so even the briefest flash is a note and not a tick. */
+const PAD_MIN = 0.12;
+/**
+ * Where the square wave is rolled off, in Hz.
+ *
+ * A bare square is a smoke alarm. Taking the top harmonics off leaves the shape that says
+ * "cheap plastic buzzer", which is the sound being aimed at, without the fizz that makes
+ * it unpleasant over a working day.
+ */
+const PAD_CUTOFF = 2600;
+
+/** The wrong-pad blat: a low square sagging in pitch over half a second. */
+const FAIL_HZ = 138;
+const FAIL_DROP = 82;
+const FAIL_TIME = 0.55;
+
+/** The win: the four pads low to high, a beat apart, after the last press has spoken. */
+const WIN_ORDER = [3, 1, 0, 2];
+const WIN_DELAY = 0.14;
+const WIN_STEP = 0.11;
+const WIN_LENGTH = 0.22;
+
+/**
+ * Simon's voice.
+ *
+ * Synthesised for the same reason the thumb piano is: the pitches are the point. Simon is
+ * the one game in the set built to be playable in silence - the tone never carries anything
+ * the colour does not - so this is a second channel for the same information rather than
+ * half of it. With sound on you can look away and still play; with sound off nothing is
+ * missing.
+ */
+export class Buzzer extends Synth {
+  constructor() {
+    super(6);
+  }
+
+  /**
+   * Sound pad `pad` for `seconds` - a playback flash, or a press.
+   *
+   * The caller passes the length because the flash shortens as the sequence grows, and a
+   * tone that outlasts the light it belongs to is a tone that answers the wrong pad.
+   */
+  play(pad: number, seconds: number): void {
+    const ctx = this.begin();
+    if (!ctx) return;
+    const i = Math.max(0, Math.min(PAD_HZ.length - 1, Math.round(pad)));
+    this.tone(ctx, PAD_HZ[i]!, Math.max(PAD_MIN, seconds), PAD_GAIN);
+  }
+
+  /** The wrong pad, or a run left to time out. */
+  fail(): void {
+    const ctx = this.begin();
+    if (!ctx) return;
+    this.tone(ctx, FAIL_HZ, FAIL_TIME, PAD_GAIN, 0, FAIL_DROP);
+  }
+
+  /** Eight rounds. Scheduled ahead rather than driven frame by frame - see `tone`. */
+  win(): void {
+    const ctx = this.begin();
+    if (!ctx) return;
+    WIN_ORDER.forEach((pad, i) => {
+      this.tone(ctx, PAD_HZ[pad]!, WIN_LENGTH, PAD_GAIN * 0.9, WIN_DELAY + i * WIN_STEP);
+    });
+  }
+
+  /**
+   * One filtered square, held flat and then let down.
+   *
+   * Flat rather than decaying from the attack: a tone that fades the moment it starts is a
+   * pluck, and a Simon pad sounds for exactly as long as it is lit. `delay` schedules a
+   * tone into the future on the audio clock, which is the only way to place the notes of a
+   * flourish accurately - a rAF loop firing them would jitter by a frame each.
+   */
+  private tone(
+    ctx: AudioContext,
+    hz: number,
+    seconds: number,
+    peak: number,
+    delay = 0,
+    endHz?: number,
+  ): void {
+    const now = ctx.currentTime + delay;
+    try {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(hz, now);
+      if (endHz !== undefined) osc.frequency.exponentialRampToValueAtTime(endHz, now + seconds);
+
+      const tame = ctx.createBiquadFilter();
+      tame.type = 'lowpass';
+      tame.frequency.value = PAD_CUTOFF;
+
+      const env = ctx.createGain();
+      // Exponential ramps cannot reach zero, hence the floor - as in Tines.pluck.
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.exponentialRampToValueAtTime(peak, now + PAD_ATTACK);
+      env.gain.setValueAtTime(peak, now + Math.max(PAD_ATTACK, seconds - PAD_RELEASE));
+      env.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+
+      osc.connect(tame).connect(env).connect(ctx.destination);
+      this.voices++;
+      osc.onended = () => {
+        this.voices--;
+        osc.disconnect();
+        tame.disconnect();
+        env.disconnect();
+      };
+      osc.start(now);
+      osc.stop(now + seconds + 0.02);
+    } catch {
+      /* as everywhere here - silence rather than a throw inside a press handler */
+    }
+  }
+}
+
 /** The thumb piano's voice. */
 export const tines = new Tines();
 /** The rain stick's beads. */
 export const beads = new Beads();
+/** Simon's pads. */
+export const buzzer = new Buzzer();
 
 /**
  * Called when the widget window hides, so nothing holds the audio device open.

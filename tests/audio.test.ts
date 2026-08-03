@@ -484,6 +484,149 @@ describe('thumb piano', () => {
   });
 });
 
+describe('simon pads', () => {
+  it('is silent while sound is off, and builds no context to be silent with', async () => {
+    const { buzzer } = await loadAudio();
+    buzzer.play(0, 0.3);
+    buzzer.fail();
+    expect(FakeAudioContext.built).toBe(0);
+  });
+
+  it('sounds the pad it was asked for, rolled off rather than a bare square', async () => {
+    const { buzzer, setSoundEnabled, PAD_HZ } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.play(2, 0.3);
+
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(1);
+    expect(ctx.oscillators[0]!.type).toBe('square');
+    expect(ctx.oscillators[0]!.frequency.events[0]!.value).toBeCloseTo(PAD_HZ[2]!, 2);
+    // The lowpass is what separates a toy buzzer from a smoke alarm.
+    expect(ctx.filters).toHaveLength(1);
+    expect(ctx.filters[0]!.type).toBe('lowpass');
+  });
+
+  /** The tone is a copy of the light, so it has to last as long as the flash does. */
+  it('holds a tone flat for the length it was given, then lets it down', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.play(0, 0.4);
+
+    const events = FakeAudioContext.last!.gains[0]!.gain.events;
+    // Up, held, down - and the last event is the release landing at the end of the flash.
+    expect(events[0]!.kind).toBe('set');
+    expect(events[1]!.kind).toBe('exp');
+    expect(events[1]!.at).toBeLessThan(0.05);
+    expect(events[events.length - 1]!.at).toBeCloseTo(0.4, 5);
+    // Never full scale - Simon plays over whatever the user is actually doing.
+    expect(events[1]!.value).toBeLessThan(0.4);
+  });
+
+  it('never lets a tone be shorter than a note', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.play(1, 0.01);
+    const events = FakeAudioContext.last!.gains[0]!.gain.events;
+    expect(events[events.length - 1]!.at).toBeGreaterThan(0.1);
+  });
+
+  it('clamps a pad it cannot play rather than sending NaN to the oscillator', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.play(99, 0.3);
+    buzzer.play(-4, 0.3);
+    for (const osc of FakeAudioContext.last!.oscillators) {
+      expect(Number.isFinite(osc.frequency.events[0]!.value)).toBe(true);
+    }
+  });
+
+  it('answers a wrong pad with a low blat that sags in pitch', async () => {
+    const { buzzer, setSoundEnabled, PAD_HZ } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.fail();
+
+    const osc = FakeAudioContext.last!.oscillators[0]!;
+    const [start, end] = osc.frequency.events;
+    // Below every pad, and falling: unmistakably not one of the four.
+    expect(start!.value).toBeLessThan(Math.min(...PAD_HZ));
+    expect(end!.kind).toBe('exp');
+    expect(end!.value).toBeLessThan(start!.value);
+  });
+
+  /** Scheduled on the audio clock, not a rAF loop, so the notes land evenly. */
+  it('plays the win as four rising notes, spaced ahead in time', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    buzzer.win();
+
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(4);
+    const hz = ctx.oscillators.map((o) => o.frequency.events[0]!.value);
+    for (let i = 1; i < hz.length; i++) expect(hz[i]).toBeGreaterThan(hz[i - 1]!);
+    // Each one starts after the one before, and none of them at the moment of the press.
+    const starts = ctx.gains.map((g) => g.gain.events[0]!.at);
+    expect(starts[0]).toBeGreaterThan(0);
+    for (let i = 1; i < starts.length; i++) expect(starts[i]).toBeGreaterThan(starts[i - 1]!);
+  });
+
+  it('caps concurrent tones, then frees them as they finish', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    for (let i = 0; i < 30; i++) buzzer.play(i % 4, 0.3);
+    const ctx = FakeAudioContext.last!;
+    const capped = ctx.oscillators.length;
+    expect(capped).toBeLessThanOrEqual(6);
+
+    for (const osc of [...ctx.oscillators]) osc.end();
+    buzzer.play(0, 0.3);
+    expect(ctx.oscillators.length).toBe(capped + 1);
+  });
+
+  it('stays silent rather than throwing where there are no oscillators', async () => {
+    const { buzzer, setSoundEnabled } = await loadAudio();
+    vi.stubGlobal('window', {
+      AudioContext: class {
+        state = 'running';
+        destination = {};
+        currentTime = 0;
+        createGain() {
+          return new FakeGain();
+        }
+        createOscillator(): never {
+          throw new Error('no oscillators here');
+        }
+      },
+    });
+
+    setSoundEnabled(true);
+    expect(() => buzzer.play(1, 0.3)).not.toThrow();
+    expect(() => buzzer.fail()).not.toThrow();
+    expect(() => buzzer.win()).not.toThrow();
+  });
+
+  /**
+   * The tones are a duplicate of the colours, so the intervals between them are what stop
+   * a random sequence sounding like a mistake. A major chord: no semitones, no tritone.
+   */
+  it('is tuned to a chord rather than four arbitrary pitches', async () => {
+    const { PAD_HZ } = await loadAudio();
+    const sorted = [...PAD_HZ].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      const semitones = 12 * Math.log2(sorted[i]! / sorted[i - 1]!);
+      expect(semitones).toBeGreaterThan(2.5);
+    }
+    // Spanning an octave exactly, which is what makes it a chord and not a scale fragment.
+    expect(12 * Math.log2(sorted[sorted.length - 1]! / sorted[0]!)).toBeCloseTo(12, 1);
+  });
+});
+
 describe('rain stick beads', () => {
   it('is silent while sound is off', async () => {
     const { beads } = await loadAudio();

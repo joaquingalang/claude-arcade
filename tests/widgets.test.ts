@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pops } from '../packages/app/src/renderer/audio';
+import { buzzer, pops } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import {
@@ -1138,7 +1138,33 @@ describe('ThumbPiano', () => {
     w.stop();
   });
 
-  it('sounds every tine a sweep crosses', () => {
+  /**
+   * The press is what separates playing from passing through. A pointer crossing the
+   * widget on its way somewhere else must not fire off a run of notes.
+   */
+  it('stays silent under a pointer that is not held down', () => {
+    const { w, st } = start();
+    for (let i = 0; i < TINE_COUNT_HINT; i++) {
+      const p = on(i);
+      w.onPointerMove(p.x, p.y);
+    }
+    expect(st.tines.every((t) => t.ring === 0)).toBe(true);
+    w.stop();
+  });
+
+  it('stops sounding once the button is released', () => {
+    const { w, st } = start();
+    w.onPointerDown(on(0).x, on(0).y);
+    w.onPointerUp(on(0).x, on(0).y);
+    for (let i = 1; i < TINE_COUNT_HINT; i++) {
+      const p = on(i);
+      w.onPointerMove(p.x, p.y);
+    }
+    expect(st.tines.slice(1).every((t) => t.ring === 0)).toBe(true);
+    w.stop();
+  });
+
+  it('sounds every tine a held sweep crosses', () => {
     const { w, st } = start();
     w.onPointerDown(on(0).x, on(0).y);
     for (let i = 1; i < TINE_COUNT_HINT; i++) {
@@ -1175,11 +1201,10 @@ const SIMON_RING_HINT = (0.15 + 0.42) / 2;
 
 interface SimonInternals {
   sequence: number[];
-  phase: 'showing' | 'input' | 'pause' | 'over';
+  phase: 'idle' | 'showing' | 'input' | 'pause' | 'over';
   result: 'win' | 'loss' | null;
   step: number;
   score: number;
-  auto: boolean;
 }
 
 describe('Simon', () => {
@@ -1204,30 +1229,54 @@ describe('Simon', () => {
     expect(st.phase).toBe('input');
   };
 
-  it('starts a sequence immediately rather than waiting to be asked', () => {
-    const { st } = start();
-    expect(st.sequence).toHaveLength(1);
-    expect(st.phase).toBe('showing');
-  });
+  /** The press that starts a run, on the hub so it cannot be read as an answer. */
+  const begin = (w: Simon) => w.onPointerDown(SIZE / 2, SIZE / 2);
 
-  it('plays itself until you touch it', () => {
+  it('waits to be started rather than flashing at nobody', () => {
     const { st } = start();
-    expect(st.auto).toBe(true);
-    pump(200);
-    // The autopilot answers correctly, so the sequence has to have grown.
-    expect(st.sequence.length).toBeGreaterThan(1);
+    expect(st.phase).toBe('idle');
+    expect(st.sequence).toHaveLength(0);
+
+    pump(200); // ~3s of being ignored
+    expect(st.phase).toBe('idle');
+    expect(st.sequence).toHaveLength(0);
     expect(st.result).toBeNull();
   });
 
-  it('hands the run over to you on the first touch, wherever it lands', () => {
+  /**
+   * A game is exempt from the cycle clock, so a board waiting to be started has to give up
+   * by itself. Handing over unstarted is not a loss - nobody played it.
+   */
+  it('hands over unstarted if nobody ever presses it', () => {
+    const { onDone, st } = start();
+    pump(1100); // ~17.6s, past the idle patience
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(st.result).toBeNull();
+    expect(st.score).toBe(0);
+  });
+
+  it('starts on a press anywhere, wherever it lands', () => {
     const { w, st } = start();
-    w.onPointerDown(SIZE / 2, SIZE / 2); // the hub: a touch, but not a press
-    expect(st.auto).toBe(false);
-    expect(st.phase).not.toBe('over');
+    begin(w); // the hub: not on any pad
+    expect(st.phase).toBe('showing');
+    expect(st.sequence).toHaveLength(1);
+    expect(st.result).toBeNull();
+  });
+
+  /** The starting press is the request for a sequence, not an answer to one. */
+  it('does not count the starting press as an answer', () => {
+    const { w, st } = start();
+    const first = pad(0);
+    w.onPointerDown(first.x, first.y);
+    toInput(st);
+    expect(st.step).toBe(0);
+    expect(st.score).toBe(0);
+    expect(st.result).toBeNull();
   });
 
   it('accepts a correct press and banks the round', () => {
     const { w, st } = start();
+    begin(w);
     toInput(st);
     const p = pad(st.sequence[st.step]!);
     w.onPointerDown(p.x, p.y);
@@ -1237,6 +1286,7 @@ describe('Simon', () => {
 
   it('ends the run on a wrong press, and hands over exactly once', () => {
     const { w, onDone, st } = start();
+    begin(w);
     toInput(st);
     const p = pad((st.sequence[st.step]! + 1) % 4);
     w.onPointerDown(p.x, p.y);
@@ -1257,8 +1307,8 @@ describe('Simon', () => {
    */
   it('calls the run if you walk away mid-sequence', () => {
     const { w, st } = start();
+    begin(w);
     toInput(st);
-    w.onPointerDown(SIZE / 2, SIZE / 2); // switches the autopilot off without pressing
     pump(400); // ~6.4s, comfortably past the patience window
     expect(st.phase).toBe('over');
     expect(st.result).toBe('loss');
@@ -1266,6 +1316,7 @@ describe('Simon', () => {
 
   it('ignores presses once the run is over', () => {
     const { w, st } = start();
+    begin(w);
     toInput(st);
     const expected = st.sequence[st.step]!;
     const wrong = pad((expected + 1) % 4);
@@ -1278,12 +1329,83 @@ describe('Simon', () => {
     expect(st.result).toBe('loss');
   });
 
-  it('is winnable - the autopilot runs it to the end and hands over once', () => {
-    const { onDone, st } = start();
-    pump(1400, 50); // ~70s: long enough for all eight rounds
+  /**
+   * The tone is a second copy of the colour, so every lit pad has to sound and the two
+   * have to agree on which pad and for how long.
+   */
+  it('sounds each flash for as long as it is lit, and each press as it lands', () => {
+    const play = vi.spyOn(buzzer, 'play').mockImplementation(() => {});
+    const { w, st } = start();
+
+    begin(w);
+    expect(play).toHaveBeenCalledTimes(1);
+    // The pad that is lit, for the length of the flash the timer was set to.
+    expect(play.mock.calls[0]![0]).toBe(st.sequence[0]);
+    expect(play.mock.calls[0]![1]).toBeGreaterThan(0.2);
+
+    toInput(st);
+    const before = play.mock.calls.length;
+    const p = pad(st.sequence[0]!);
+    w.onPointerDown(p.x, p.y);
+    expect(play.mock.calls.length).toBe(before + 1);
+    expect(play.mock.calls[before]![0]).toBe(st.sequence[0]);
+
+    w.stop();
+    play.mockRestore();
+  });
+
+  it('blats once on a wrong pad, and does not sound the pad that lost it', () => {
+    const fail = vi.spyOn(buzzer, 'fail').mockImplementation(() => {});
+    const play = vi.spyOn(buzzer, 'play').mockImplementation(() => {});
+    const { w, st } = start();
+
+    begin(w);
+    toInput(st);
+    const before = play.mock.calls.length;
+    const wrong = pad((st.sequence[st.step]! + 1) % 4);
+    w.onPointerDown(wrong.x, wrong.y);
+
+    expect(fail).toHaveBeenCalledOnce();
+    expect(play.mock.calls.length).toBe(before);
+
+    w.stop();
+    fail.mockRestore();
+    play.mockRestore();
+  });
+
+  it('blats when a run times out, the same as a wrong pad', () => {
+    const fail = vi.spyOn(buzzer, 'fail').mockImplementation(() => {});
+    const { w, st } = start();
+
+    begin(w);
+    toInput(st);
+    pump(400); // past the patience window
+    expect(st.result).toBe('loss');
+    expect(fail).toHaveBeenCalledOnce();
+
+    w.stop();
+    fail.mockRestore();
+  });
+
+  it('is winnable - eight rounds answered correctly, handed over once', () => {
+    const win = vi.spyOn(buzzer, 'win').mockImplementation(() => {});
+    const { w, onDone, st } = start();
+    begin(w);
+    for (let round = 0; round < SIMON_ROUNDS_HINT; round++) {
+      toInput(st);
+      for (const i of [...st.sequence]) {
+        const p = pad(i);
+        w.onPointerDown(p.x, p.y);
+      }
+    }
     expect(st.result).toBe('win');
     expect(st.score).toBe(SIMON_ROUNDS_HINT);
+    expect(win).toHaveBeenCalledOnce();
+
+    expect(onDone).not.toHaveBeenCalled();
+    pump(150); // past the result pause
     expect(onDone).toHaveBeenCalledTimes(1);
+    win.mockRestore();
   });
 });
 
