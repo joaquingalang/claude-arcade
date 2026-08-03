@@ -1,0 +1,26 @@
+{
+  "name": "@claude-arcade/app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "npm run build:renderer && npm run build:main",
+    "build:main": "tsc -b",
+    "build:renderer": "vite build",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron ."
+  },
+  "dependencies": {
+    "@claude-arcade/shared": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^43.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^8.2.0",
+    "zustand": "^4.5.4"
+  }
+}

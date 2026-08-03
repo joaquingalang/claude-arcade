@@ -1,0 +1,15 @@
+{
+  "name": "@claude-arcade/cli",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "arcade": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@claude-arcade/shared": "0.1.0"
+  }
+}

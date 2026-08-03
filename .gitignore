@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+out/
+release/
+.DS_Store
+.claude/
+.tokensave/
