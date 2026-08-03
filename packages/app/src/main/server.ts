@@ -3,6 +3,7 @@ import * as http from 'node:http';
 import {
   APP_ID,
   LOOPBACK,
+  isWidgetId,
   portsInRange,
   type HookPayload,
   type PingResponse,
@@ -14,6 +15,10 @@ export interface ServerHandlers {
   onHook(payload: HookPayload, token?: string): void;
   onSessionRegistered(launcherPid: number, cwd: string, token: string): void;
   onSessionEnded(token: string): void;
+  /** `arcade play <id>` - show one named widget, regardless of what Claude is doing. */
+  onPlay(widgetId: string): void;
+  /** `arcade stop` - hand the window back to whatever the sessions want. */
+  onStopPlaying(): void;
   /** Snapshot for `arcade doctor` and for end-to-end tests. */
   status(): unknown;
 }
@@ -141,6 +146,16 @@ async function handleRequest(
       if (typeof b.token === 'string') handlers.onSessionEnded(b.token);
       break;
     }
+    case '/play': {
+      const b = parsed as { widgetId?: string };
+      // An unknown id is dropped here rather than passed on: the app must not be talked
+      // into showing a widget that doesn't exist by anything on the wire.
+      if (typeof b.widgetId === 'string' && isWidgetId(b.widgetId)) handlers.onPlay(b.widgetId);
+      break;
+    }
+    case '/stop-playing':
+      handlers.onStopPlaying();
+      break;
     default:
       break;
   }

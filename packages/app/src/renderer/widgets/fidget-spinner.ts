@@ -43,6 +43,115 @@ const HUB_CAP_R = 0.15;
 const BLUR_FULL = 14;
 const GHOSTS = 10;
 
+/**
+ * A finish is a colourway that needs more than a flat gradient to read right.
+ *
+ * `gold` rakes its highlight from a fixed point in the room instead of a fixed point on
+ * the part, which is the difference between metal and yellow plastic. `prismatic` is the
+ * rare pull: an oil-slick sheen over pearl, a halo, and glints off the lobe tips.
+ */
+export type Finish = 'gold' | 'prismatic';
+
+export interface Colorway {
+  /** Also what you set on `window.widgets` in the harness to force a pull. */
+  id: string;
+  /** Three stops taken across the body, corner to corner. */
+  body: readonly [string, string, string];
+  /** What the spin ghosts smear into - a light, desaturated take on the body. */
+  ghost: string;
+  /** Lit edge, mid, shaded edge. Defaults to the neutral white-to-navy rim. */
+  rim?: readonly [string, string, string];
+  /** Relative frequency of this pull, not a percentage - see `rollColorway`. */
+  weight: number;
+  finish?: Finish;
+}
+
+const RIM_DEFAULT = [
+  'rgba(255,255,255,0.75)',
+  'rgba(255,255,255,0.16)',
+  'rgba(40,55,100,0.35)',
+] as const;
+
+/**
+ * The pull table.
+ *
+ * Weights are relative, so a colourway can be added or retuned without recomputing
+ * anybody else's odds. As it stands the commons are 90.8% between them, gold is 7.5%,
+ * and prismatic is 1.7% - rare enough that you remember seeing it.
+ */
+export const COLORWAYS: readonly Colorway[] = [
+  // The original body gradient, kept as one pull among many rather than retired.
+  { id: 'aurora', body: ['#8ad4fb', '#7d8cf5', '#b478f0'], ghost: '#93a8ff', weight: 100 },
+  { id: 'ember', body: ['#ffd08a', '#ff8a5c', '#e0457b'], ghost: '#ffa07f', weight: 100 },
+  { id: 'jade', body: ['#b6f7d8', '#3fd6a5', '#0f8f8d'], ghost: '#6ee5c0', weight: 100 },
+  { id: 'bubblegum', body: ['#ffe0f4', '#ff8ecb', '#a45cf0'], ghost: '#ffa8dc', weight: 100 },
+  { id: 'citrus', body: ['#fff6a8', '#ffd23f', '#f27a1a'], ghost: '#ffdc72', weight: 100 },
+  { id: 'abyss', body: ['#5fd0ff', '#2f6bd8', '#1a2266'], ghost: '#5c8ce8', weight: 100 },
+  {
+    id: 'graphite',
+    body: ['#9aa7bf', '#4d5872', '#20273a'],
+    ghost: '#7d8aa6',
+    rim: ['rgba(255,255,255,0.62)', 'rgba(255,255,255,0.12)', 'rgba(10,14,26,0.5)'],
+    weight: 100,
+  },
+  {
+    id: 'gold',
+    body: ['#fff4cd', '#e8bd4e', '#8a5f0c'],
+    ghost: '#ffd98a',
+    rim: ['rgba(255,247,214,0.9)', 'rgba(255,236,176,0.22)', 'rgba(88,54,6,0.5)'],
+    weight: 58,
+    finish: 'gold',
+  },
+  {
+    id: 'prismatic',
+    // Pearl underneath; the conic rainbow rides on top of it, so this is the base coat.
+    body: ['#ffffff', '#eef3ff', '#dfe6f7'],
+    ghost: '#cfe9ff',
+    rim: ['rgba(255,255,255,0.95)', 'rgba(210,240,255,0.3)', 'rgba(70,40,120,0.35)'],
+    weight: 13,
+    finish: 'prismatic',
+  },
+];
+
+const TOTAL_WEIGHT = COLORWAYS.reduce((sum, c) => sum + c.weight, 0);
+
+/**
+ * Pick a colourway for one opening of the spinner.
+ *
+ * `roll` is injectable so the odds can be tested at the boundaries instead of by
+ * sampling, and so the harness can force a specific pull.
+ */
+export function rollColorway(roll: number = Math.random()): Colorway {
+  let ticket = Math.min(Math.max(roll, 0), 0.999999) * TOTAL_WEIGHT;
+  for (const c of COLORWAYS) {
+    ticket -= c.weight;
+    if (ticket < 0) return c;
+  }
+  return COLORWAYS[0]!;
+}
+
+/** World-space direction the key light rakes across the body, matching the flat gradient. */
+const LIGHT_ANGLE = Math.PI / 4;
+
+/** Alternating light and dark bands - what makes gold read as metal rather than yellow. */
+const GOLD_BANDS: ReadonlyArray<[number, string]> = [
+  [0, '#fff8de'],
+  [0.14, '#f6dd93'],
+  [0.28, '#d3a02c'],
+  [0.4, '#a9760f'],
+  [0.52, '#f0cd6c'],
+  [0.63, '#ffefba'],
+  [0.76, '#c9932a'],
+  [0.88, '#8e6210'],
+  [1, '#ffe9a8'],
+];
+
+/** Hue stops for the prismatic slick, in degrees around the hub. */
+const SLICK_STOPS = 9;
+const SLICK_ALPHA = 0.62;
+/** How much faster the slick counter-rotates than the body, so the colours visibly flow. */
+const SLICK_DRIFT = 2.4;
+
 export class FidgetSpinner extends CanvasWidget {
   private angle = 0;
   private omega = 0;
@@ -51,6 +160,8 @@ export class FidgetSpinner extends CanvasWidget {
   private cx = 0;
   private cy = 0;
   private radius = 0;
+  /** Rolled once per opening, in `init` - a fresh window is a fresh pull. */
+  private skin: Colorway = COLORWAYS[0]!;
 
   protected init(): void {
     this.cx = this.size / 2;
@@ -59,6 +170,7 @@ export class FidgetSpinner extends CanvasWidget {
     this.angle = 0;
     // A gentle idle spin, so it looks alive the moment it appears.
     this.omega = 2.5;
+    this.skin = rollColorway();
   }
 
   protected update(dt: number): void {
@@ -165,6 +277,128 @@ export class FidgetSpinner extends CanvasWidget {
     ctx.stroke();
   }
 
+  /**
+   * A gradient raked across the body along a *world* axis.
+   *
+   * The body path is traced inside `rotate(this.angle)`, so an axis that is constant in
+   * local space turns with the part and the highlight goes along for the ride. Undoing
+   * the body's rotation pins the light to the room instead, which is the whole reason
+   * metal glitters as it turns.
+   */
+  private rakedGradient(R: number, stops: ReadonlyArray<[number, string]>): CanvasGradient {
+    const a = LIGHT_ANGLE - this.angle;
+    const dx = Math.cos(a) * R * Math.SQRT2;
+    const dy = Math.sin(a) * R * Math.SQRT2;
+    const grad = this.ctx.createLinearGradient(-dx, -dy, dx, dy);
+    for (const [at, color] of stops) grad.addColorStop(at, color);
+    return grad;
+  }
+
+  /** The body fill for the current colourway, in the body's own rotated frame. */
+  private bodyFill(R: number): CanvasGradient {
+    const [a, b, c] = this.skin.body;
+    if (this.skin.finish === 'gold') return this.rakedGradient(R, GOLD_BANDS);
+    const grad = this.ctx.createLinearGradient(-R, -R, R, R);
+    grad.addColorStop(0, a);
+    grad.addColorStop(0.5, b);
+    grad.addColorStop(1, c);
+    return grad;
+  }
+
+  /**
+   * The oil-slick pass: a full-spectrum conic sweep laid over the pearl base.
+   *
+   * It counter-rotates faster than the body, so the bands wash around the arms instead of
+   * sitting still on them - the colour is light on the surface, not paint under it.
+   */
+  private drawSlick(R: number): void {
+    const ctx = this.ctx;
+    const slick = ctx.createConicGradient(-this.angle * SLICK_DRIFT, 0, 0);
+    for (let i = 0; i <= SLICK_STOPS; i++) {
+      const t = i / SLICK_STOPS;
+      slick.addColorStop(t, `hsla(${Math.round(t * 360)}, 100%, 68%, ${SLICK_ALPHA})`);
+    }
+    this.traceOutline();
+    this.traceBores();
+    ctx.fillStyle = slick;
+    ctx.fill('evenodd');
+
+    // A hot band raked across the slick, pinned to the room like the gold highlight.
+    const bar = this.rakedGradient(R, [
+      [0, 'rgba(255,255,255,0)'],
+      [0.42, 'rgba(255,255,255,0.5)'],
+      [0.5, 'rgba(255,255,255,0.78)'],
+      [0.58, 'rgba(255,255,255,0.5)'],
+      [1, 'rgba(255,255,255,0)'],
+    ]);
+    this.traceOutline();
+    this.traceBores();
+    ctx.fillStyle = bar;
+    ctx.fill('evenodd');
+  }
+
+  /**
+   * The halo the prismatic body throws onto the desktop behind it.
+   *
+   * Its hue walks with the spin and its strength with the speed, so a resting spinner
+   * only shimmers and a flicked one blooms. Capped at 1.18R, which still clears the
+   * window box - the body itself already reaches exactly 1R.
+   */
+  private drawHalo(R: number, blur: number): void {
+    const ctx = this.ctx;
+    const hue = Math.round(((this.angle * 60) % 360) + 360) % 360;
+    const alpha = 0.1 + 0.32 * blur;
+    const halo = ctx.createRadialGradient(0, 0, R * 0.5, 0, 0, R * 1.18);
+    halo.addColorStop(0, `hsla(${hue}, 100%, 70%, ${alpha})`);
+    halo.addColorStop(0.55, `hsla(${(hue + 90) % 360}, 100%, 66%, ${alpha * 0.55})`);
+    halo.addColorStop(1, `hsla(${(hue + 180) % 360}, 100%, 62%, 0)`);
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.18, 0, TAU);
+    ctx.fillStyle = halo;
+    ctx.fill();
+  }
+
+  /**
+   * Glints at the three lobe tips: a four-point star plus a hot core.
+   *
+   * Twinkled off the spin angle rather than wall time, so they pulse as the spinner turns
+   * and settle when it stops - and they fade as the blur comes up, where the ghosts have
+   * already taken over the eye.
+   */
+  private drawGlints(R: number, blur: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < LOBES; i++) {
+      const a = (i / LOBES) * TAU;
+      const d = (LOBE_D + LOBE_R * 0.5) * R;
+      const x = Math.cos(a) * d;
+      const y = Math.sin(a) * d;
+      const twinkle = 0.5 + 0.5 * Math.sin(this.angle * 3 + (i * TAU) / LOBES);
+      const amp = (0.3 + 0.7 * twinkle) * (1 - 0.55 * blur);
+      const arm = R * 0.15 * (0.55 + 0.45 * twinkle);
+
+      ctx.globalAlpha = amp;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = Math.max(1, R * 0.012);
+      ctx.beginPath();
+      ctx.moveTo(x - arm, y);
+      ctx.lineTo(x + arm, y);
+      ctx.moveTo(x, y - arm);
+      ctx.lineTo(x, y + arm);
+      ctx.stroke();
+
+      const core = ctx.createRadialGradient(x, y, 0, x, y, arm * 0.5);
+      core.addColorStop(0, 'rgba(255,255,255,0.95)');
+      core.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.beginPath();
+      ctx.arc(x, y, arm * 0.5, 0, TAU);
+      ctx.fillStyle = core;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   protected draw(): void {
     const ctx = this.ctx;
     const R = this.radius;
@@ -172,6 +406,9 @@ export class FidgetSpinner extends CanvasWidget {
 
     ctx.save();
     ctx.translate(this.cx, this.cy);
+
+    // Behind everything, so the body sits in its own glow rather than under a wash.
+    if (this.skin.finish === 'prismatic') this.drawHalo(R, blur);
 
     // Spin blur: ghost bodies trailing the real one. Cheaper than a real blur, and it
     // reads better - the lobes smear into a disc the way a fast spinner actually does.
@@ -184,7 +421,7 @@ export class FidgetSpinner extends CanvasWidget {
         ctx.globalAlpha = 0.11 * blur * (1 - g / (GHOSTS + 1));
         this.traceOutline();
         this.traceBores();
-        ctx.fillStyle = '#93a8ff';
+        ctx.fillStyle = this.skin.ghost;
         ctx.fill('evenodd');
         ctx.restore();
       }
@@ -199,15 +436,15 @@ export class FidgetSpinner extends CanvasWidget {
     ctx.shadowOffsetY = R * 0.05;
     this.traceOutline();
     this.traceBores();
-    const grad = ctx.createLinearGradient(-R, -R, R, R);
-    grad.addColorStop(0, '#8ad4fb');
-    grad.addColorStop(0.5, '#7d8cf5');
-    grad.addColorStop(1, '#b478f0');
-    ctx.fillStyle = grad;
+    ctx.fillStyle = this.bodyFill(R);
     ctx.fill('evenodd');
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
+
+    // Over the pearl base but under the sheen, so the slick still takes the moulded
+    // highlight rather than sitting flat on top of it.
+    if (this.skin.finish === 'prismatic') this.drawSlick(R);
 
     // Sheen across the upper-left face: the cue that the body is moulded, not flat. It
     // re-fills the same path rather than clipping one, so nothing is ever painted
@@ -223,10 +460,11 @@ export class FidgetSpinner extends CanvasWidget {
 
     // Rim: lit along the top-left edge, shaded along the bottom-right, which is what
     // gives the body thickness. One gradient stroke does both.
+    const [lit, mid, shade] = this.skin.rim ?? RIM_DEFAULT;
     const rim = ctx.createLinearGradient(-R * 0.6, -R * 0.8, R * 0.6, R * 0.8);
-    rim.addColorStop(0, 'rgba(255,255,255,0.75)');
-    rim.addColorStop(0.5, 'rgba(255,255,255,0.16)');
-    rim.addColorStop(1, 'rgba(40,55,100,0.35)');
+    rim.addColorStop(0, lit);
+    rim.addColorStop(0.5, mid);
+    rim.addColorStop(1, shade);
     this.traceOutline();
     ctx.strokeStyle = rim;
     ctx.lineWidth = Math.max(1.2, R * 0.026);
@@ -236,6 +474,9 @@ export class FidgetSpinner extends CanvasWidget {
       const [lx, ly] = this.lobeAt(i);
       this.drawBearing(lx, ly, R * BEARING_R, R * BORE_R);
     }
+
+    // Last of the rotating passes: glints belong on top of the bearings, not under them.
+    if (this.skin.finish === 'prismatic') this.drawGlints(R, blur);
 
     ctx.restore();
 

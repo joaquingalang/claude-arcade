@@ -10,6 +10,7 @@ import {
 } from '@claude-arcade/shared';
 
 import { ConfigStore } from './config';
+import { readSample } from './samples';
 import { SessionStore } from './session-store';
 import { startServer, type RunningServer } from './server';
 import { WidgetWindow } from './widget-window';
@@ -24,6 +25,8 @@ import {
 
 const VERSION = '0.1.0';
 const REAP_INTERVAL_MS = 15_000;
+/** Vite copies `renderer/public/sounds` here verbatim, alongside the built index.html. */
+const SOUNDS_DIR = path.join(__dirname, '..', 'renderer', 'sounds');
 
 let server: RunningServer | null = null;
 let widgetWindow: WidgetWindow | null = null;
@@ -49,6 +52,16 @@ const rotation = new WidgetRotation();
 let generation = 0;
 /** The user waved this appearance away. Cleared as soon as the work stops. */
 let dismissed = false;
+/**
+ * A widget the user asked for by name with `arcade play`, or null for the usual behaviour.
+ *
+ * It outranks session state in both directions: it appears with nothing working, and it
+ * survives a turn that would otherwise have rotated it away. That asymmetry is the whole
+ * point of the command - `arcade play snake` is someone deciding they want a game now,
+ * not a suggestion about what to show next time Claude is busy. Only a dismissal or
+ * `arcade stop` takes it back.
+ */
+let handPicked: string | null = null;
 
 // A second instance would fight over the port and the runtime file.
 if (!app.requestSingleInstanceLock()) {
@@ -61,8 +74,16 @@ function stopCycle(): void {
   cycleTimer = null;
 }
 
+function clearShowTimer(): void {
+  if (!showTimer) return;
+  clearTimeout(showTimer);
+  showTimer = null;
+}
+
 /** True when the config wants the toy to move on by itself at all. */
 function rotationEnabled(): boolean {
+  // Asking for a widget by name is the strongest form of the same choice a pin makes.
+  if (handPicked !== null) return false;
   const { widget, cycleMs } = config.get();
   // A pinned widget is a choice, not a suggestion; only 'random' rotates.
   return widget === 'random' && cycleMs > 0;
@@ -132,6 +153,41 @@ function onWidgetDone(id: string): void {
 }
 
 /**
+ * Put a named widget up and keep it there - `arcade play <id>`.
+ *
+ * Swaps in place when the window is already up rather than hiding and showing again, so
+ * playing one game straight after another doesn't blink the window off the desktop
+ * between them.
+ */
+function startPlaying(id: string): void {
+  if (!widgetWindow) return;
+
+  handPicked = id;
+  // A dismissal covers one stretch of work. It must never swallow a request made after
+  // it - typing `arcade play snake` and getting nothing would read as a broken command.
+  dismissed = false;
+  clearShowTimer();
+  stopCycle();
+
+  currentWidgetId = id;
+  generation++;
+  if (widgetWindow.isVisible()) widgetWindow.setWidget(id, generation);
+  else widgetWindow.show(id, generation);
+
+  syncKeyboard();
+}
+
+/** Hand the window back to session state, whatever it happens to want right now. */
+function stopPlaying(): void {
+  if (handPicked === null) return;
+  handPicked = null;
+  // Hidden before reconciling, so a session that is mid-turn draws a fresh widget from
+  // the rotation instead of inheriting the hand-picked one.
+  widgetWindow?.hide();
+  reconcile();
+}
+
+/**
  * Reconcile window visibility with session state.
  *
  * Called after every event. Cheap and idempotent, so it's safe to call redundantly -
@@ -140,10 +196,10 @@ function onWidgetDone(id: string): void {
 function reconcile(): void {
   if (!widgetWindow) return;
 
-  if (showTimer) {
-    clearTimeout(showTimer);
-    showTimer = null;
-  }
+  clearShowTimer();
+
+  // A hand-picked widget answers to `arcade stop` and the dismiss button, not to Claude.
+  if (handPicked !== null) return;
 
   const wantVisible = sessions.shouldShowWidget();
   // A dismissal covers this stretch of work only. Once everything goes quiet the next
@@ -195,9 +251,16 @@ async function bootstrap(): Promise<void> {
         sessions.unregisterLauncher(token);
         reconcile();
       },
+      onPlay: (widgetId) => {
+        startPlaying(widgetId);
+      },
+      onStopPlaying: () => {
+        stopPlaying();
+      },
       status: () => ({
         widgetVisible: widgetWindow?.isVisible() ?? false,
         widgetId: currentWidgetId,
+        playing: handPicked,
         sessions: sessions.all(),
       }),
     },
@@ -210,6 +273,7 @@ async function bootstrap(): Promise<void> {
     path.join(__dirname, '..', 'renderer', 'index.html'),
     path.join(__dirname, '..', 'preload', 'index.js'),
     (pos) => config.update({ position: pos }),
+    () => config.get().soundEnabled,
   );
   widgetWindow.create(config.get().position);
 
@@ -237,12 +301,21 @@ app.whenReady().then(() => {
   });
   ipcMain.on('arcade:dismiss', () => {
     dismissed = true;
+    // The X means "away, now", whoever put the widget there. Clearing this is what stops
+    // a hand-picked widget from springing straight back at the next hook event.
+    handPicked = null;
     stopCycle();
     widgetWindow?.hide();
     syncKeyboard();
   });
   ipcMain.on('arcade:widget-done', (_e, id: string) => {
     onWidgetDone(id);
+  });
+  // invoke, not on: the renderer is asking for bytes back. See main/samples.ts for why
+  // the renderer cannot simply fetch these itself.
+  ipcMain.handle('arcade:read-sample', async (_e, name: string) => {
+    const bytes = await readSample(SOUNDS_DIR, name);
+    return bytes ? new Uint8Array(bytes) : null;
   });
 
   bootstrap().catch((err) => {

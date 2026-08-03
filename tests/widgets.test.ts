@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { pops } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
-import { FidgetSpinner } from '../packages/app/src/renderer/widgets/fidget-spinner';
+import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
+import {
+  COLORWAYS,
+  FidgetSpinner,
+  rollColorway,
+} from '../packages/app/src/renderer/widgets/fidget-spinner';
 import { FlappyBird } from '../packages/app/src/renderer/widgets/flappy-bird';
 import { NewtonsCradle } from '../packages/app/src/renderer/widgets/newtons-cradle';
 import { Pong } from '../packages/app/src/renderer/widgets/pong';
+import { RainStick } from '../packages/app/src/renderer/widgets/rain-stick';
+import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
+import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
+import { Suika } from '../packages/app/src/renderer/widgets/suika';
+import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
 
 const SIZE = 280;
@@ -35,11 +46,14 @@ function makeCtx() {
     closePath: rec('closePath'),
     moveTo: rec('moveTo'),
     lineTo: rec('lineTo'),
+    quadraticCurveTo: rec('quadraticCurveTo'),
     arc: rec('arc'),
     ellipse: rec('ellipse'),
     fill: rec('fill'),
     stroke: rec('stroke'),
     clearRect: rec('clearRect'),
+    rect: rec('rect'),
+    clip: rec('clip'),
     fillRect: rec('fillRect'),
     fillText: rec('fillText'),
     measureText: () => {
@@ -52,6 +66,10 @@ function makeCtx() {
     },
     createLinearGradient: () => {
       calls.push('createLinearGradient');
+      return gradient;
+    },
+    createConicGradient: () => {
+      calls.push('createConicGradient');
       return gradient;
     },
     fillStyle: '' as unknown,
@@ -95,13 +113,23 @@ function pump(frames: number, msPerFrame = 16) {
   }
 }
 
-const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
+const toys: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'BubbleWrap', make: () => new BubbleWrap() },
   { name: 'FidgetSpinner', make: () => new FidgetSpinner() },
   { name: 'NewtonsCradle', make: () => new NewtonsCradle() },
+  { name: 'FallingSand', make: () => new FallingSand() },
+  { name: 'RainStick', make: () => new RainStick() },
+  { name: 'ThumbPiano', make: () => new ThumbPiano() },
+];
+
+const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
+  ...toys,
   { name: 'Snake', make: () => new Snake() },
   { name: 'FlappyBird', make: () => new FlappyBird() },
   { name: 'Pong', make: () => new Pong() },
+  { name: 'Simon', make: () => new Simon() },
+  { name: 'Suika', make: () => new Suika() },
+  { name: 'SpaceInvaders', make: () => new SpaceInvaders() },
 ];
 
 describe.each(widgets)('$name', ({ make }) => {
@@ -181,11 +209,7 @@ describe.each(widgets)('$name', ({ make }) => {
  * Games report when they are done and the cycle waits for them; the fidget toys have no
  * end and must never report, or the clock would stop being what moves them along.
  */
-describe.each([
-  { name: 'BubbleWrap', make: () => new BubbleWrap() },
-  { name: 'FidgetSpinner', make: () => new FidgetSpinner() },
-  { name: 'NewtonsCradle', make: () => new NewtonsCradle() },
-])('$name is paced by the clock, not by itself', ({ make }) => {
+describe.each(toys)('$name is paced by the clock, not by itself', ({ make }) => {
   it('never reports done, however long it runs or is poked', () => {
     const ctx = makeCtx();
     const onDone = vi.fn();
@@ -226,6 +250,30 @@ describe('BubbleWrap', () => {
     expect(bubbles().some((b) => !b.popped)).toBe(true);
     w.stop();
   });
+
+  it('asks for a pop sound once per bubble, and not for a miss', () => {
+    const play = vi.spyOn(pops, 'play').mockImplementation(() => {});
+    const ctx = makeCtx();
+    const w = new BubbleWrap();
+    w.start(ctx, { width: SIZE, height: SIZE });
+
+    const bubbles = (w as unknown as { bubbles: Array<{ cx: number; cy: number }> }).bubbles;
+    const first = bubbles[0]!;
+
+    w.onPointerDown(first.cx, first.cy);
+    expect(play).toHaveBeenCalledOnce();
+
+    // The same bubble again is already flat - a dead bubble must not keep making noise.
+    w.onPointerDown(first.cx, first.cy);
+    expect(play).toHaveBeenCalledOnce();
+
+    // The gap between bubbles is silent too.
+    w.onPointerMove(0, 0);
+    expect(play).toHaveBeenCalledOnce();
+
+    w.stop();
+    play.mockRestore();
+  });
 });
 
 describe('FidgetSpinner', () => {
@@ -252,6 +300,77 @@ describe('FidgetSpinner', () => {
     w.onPointerMove(SIZE / 2 + 80, SIZE / 2);
     expect(Math.abs(omega())).toBeGreaterThan(0);
     w.onPointerUp(0, 0);
+  });
+
+  it('rolls a colourway on every opening', () => {
+    const ctx = makeCtx();
+    const w = new FidgetSpinner();
+    const skin = () => (w as unknown as { skin: { id: string } }).skin;
+
+    // The rare pull sits at the far end of the table, so a roll of ~1 lands on it and a
+    // roll of 0 lands on the first common - proving the pick follows the dice at all.
+    const rand = vi.spyOn(Math, 'random');
+
+    rand.mockReturnValue(0);
+    w.start(ctx, { width: SIZE, height: SIZE });
+    expect(skin().id).toBe(COLORWAYS[0]!.id);
+    w.stop();
+
+    rand.mockReturnValue(0.9999);
+    w.start(ctx, { width: SIZE, height: SIZE });
+    expect(skin().id).toBe(COLORWAYS[COLORWAYS.length - 1]!.id);
+    w.stop();
+
+    rand.mockRestore();
+  });
+});
+
+describe('rollColorway', () => {
+  it('covers the whole table and never falls off either end', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 2000; i++) seen.add(rollColorway(i / 2000).id);
+    expect(seen.size).toBe(COLORWAYS.length);
+
+    // Out-of-range and boundary rolls still have to return a real colourway; a spinner
+    // that opens with `undefined` for a skin throws on its first frame.
+    for (const roll of [0, 1, -0.5, 1.5, Number.NaN]) {
+      expect(COLORWAYS).toContain(rollColorway(roll));
+    }
+  });
+
+  it('keeps the special finishes rare', () => {
+    let gold = 0;
+    let prismatic = 0;
+    const N = 10_000;
+    for (let i = 0; i < N; i++) {
+      const finish = rollColorway(i / N).finish;
+      if (finish === 'gold') gold++;
+      if (finish === 'prismatic') prismatic++;
+    }
+    // A sweep over the unit interval measures the table exactly, no sampling noise.
+    expect(gold / N).toBeGreaterThan(0.03);
+    expect(gold / N).toBeLessThan(0.12);
+    expect(prismatic / N).toBeGreaterThan(0.005);
+    expect(prismatic / N).toBeLessThan(0.035);
+  });
+});
+
+describe.each(COLORWAYS.map((c) => [c.id, c] as const))('FidgetSpinner in %s', (_id, skin) => {
+  it('draws without touching an unsupported context call', () => {
+    const ctx = makeCtx();
+    const w = new FidgetSpinner();
+    w.start(ctx, { width: SIZE, height: SIZE });
+    (w as unknown as { skin: typeof skin }).skin = skin;
+    ctx.calls.length = 0;
+
+    // Both at speed and at rest: the finishes scale their glow and glints off the blur,
+    // and a divide-by-zero or a NaN colour only shows up at one end or the other.
+    pump(30);
+    (w as unknown as { omega: number }).omega = 0;
+    pump(30);
+
+    expect(ctx.calls).toContain('fill');
+    w.stop();
   });
 });
 
@@ -793,5 +912,715 @@ describe('Pong', () => {
     pump(60);
     expect(st.aiScore).toBe(5);
     expect(st.playerScore).toBe(0);
+  });
+});
+
+/** Kept in step with COLS/ROWS in falling-sand.ts; the module does not export them. */
+const SAND_CELLS_HINT = 56 * 56;
+
+interface SandInternals {
+  count: number;
+  phase: 'pouring' | 'draining';
+  pour: { c: number; r: number } | null;
+}
+
+describe('FallingSand', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new FallingSand();
+    w.start(ctx, { width: SIZE, height: SIZE });
+    return { w, st: w as unknown as SandInternals };
+  };
+
+  it('opens with a mound already laid down', () => {
+    const { st } = start();
+    expect(st.count).toBeGreaterThan(0);
+  });
+
+  it('pours far faster under a held pointer than the ambient stream alone', () => {
+    const idle = start();
+    const idleBefore = idle.st.count;
+    pump(30);
+    const ambient = idle.st.count - idleBefore;
+    idle.w.stop();
+
+    const held = start();
+    const heldBefore = held.st.count;
+    held.w.onPointerDown(SIZE / 2, 6);
+    pump(30);
+    expect(held.st.count - heldBefore).toBeGreaterThan(ambient);
+    held.w.stop();
+  });
+
+  it('stops pouring when the button comes up', () => {
+    const { w, st } = start();
+    w.onPointerDown(SIZE / 2, 6);
+    expect(st.pour).not.toBeNull();
+    w.onPointerUp(SIZE / 2, 6);
+    expect(st.pour).toBeNull();
+  });
+
+  // The whole reason the toy has phases: a box that fills up is a still picture, and this
+  // one has to be able to sit beside a terminal all day.
+  it('opens the floor before the box can fill', () => {
+    const { w, st } = start();
+    w.onPointerDown(SIZE / 2, 6);
+
+    let drained = false;
+    for (let i = 0; i < 500; i++) {
+      pump(1, 50);
+      if (st.phase === 'draining') drained = true;
+      expect(st.count).toBeLessThan(SAND_CELLS_HINT);
+    }
+    expect(drained).toBe(true);
+    w.stop();
+  });
+});
+
+/** Kept in step with the tube geometry in rain-stick.ts. */
+const STICK_LEN_HINT = 0.74 * SIZE;
+const STICK_HALF_W_HINT = (0.26 * SIZE) / 2;
+const BEAD_R_HINT = 0.017 * SIZE;
+const BEAD_COUNT_HINT = 44;
+
+interface StickInternals {
+  beads: Array<{ ax: number; ay: number; vx: number; vy: number }>;
+  pegs: Array<{ ax: number; ay: number }>;
+  angle: number;
+  target: number;
+  dragging: boolean;
+  ticks: number;
+}
+
+describe('RainStick', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new RainStick();
+    w.start(ctx, { width: SIZE, height: SIZE });
+    return { w, st: w as unknown as StickInternals };
+  };
+
+  it('keeps every bead inside the tube, at any angle', () => {
+    const { w, st } = start();
+    // Haul it right round, which is the worst case for beads escaping an end.
+    for (let turn = 0; turn < 8; turn++) {
+      const a = (turn / 8) * Math.PI * 2;
+      w.onPointerDown(SIZE / 2 + Math.sin(a) * 300, SIZE / 2 + Math.cos(a) * 300);
+      pump(40);
+    }
+    for (const b of st.beads) {
+      expect(Math.abs(b.ax)).toBeLessThanOrEqual(STICK_HALF_W_HINT - BEAD_R_HINT + 0.5);
+      expect(b.ay).toBeGreaterThanOrEqual(BEAD_R_HINT - 0.5);
+      expect(b.ay).toBeLessThanOrEqual(STICK_LEN_HINT - BEAD_R_HINT + 0.5);
+    }
+    expect(st.beads).toHaveLength(BEAD_COUNT_HINT);
+    w.stop();
+  });
+
+  it('pours the beads to whichever end is downhill', () => {
+    const { w, st } = start();
+
+    // B end pointing down: beads should collect at high ay.
+    w.onPointerDown(SIZE / 2, SIZE);
+    pump(240);
+    const low = st.beads.reduce((a, b) => a + b.ay, 0) / st.beads.length;
+
+    // Now flip it over.
+    w.onPointerDown(SIZE / 2, 0);
+    pump(240);
+    const high = st.beads.reduce((a, b) => a + b.ay, 0) / st.beads.length;
+
+    expect(low).toBeGreaterThan(STICK_LEN_HINT * 0.5);
+    expect(high).toBeLessThan(STICK_LEN_HINT * 0.5);
+    w.stop();
+  });
+
+  /** Left alone it has to keep turning, or a settled stick is a still picture. */
+  it('drifts on its own when nobody is holding it', () => {
+    const { w, st } = start();
+    const before = st.angle;
+    pump(120);
+    expect(st.angle).not.toBeCloseTo(before, 3);
+    w.stop();
+  });
+
+  it('stops drifting while you are swinging it, and follows the pointer instead', () => {
+    const { w, st } = start();
+    w.onPointerDown(SIZE, SIZE / 2);
+    pump(60);
+    expect(st.dragging).toBe(true);
+    // Pointer due right of centre means the low end should be pointing right: +pi/2.
+    expect(st.angle).toBeCloseTo(Math.PI / 2, 1);
+    w.stop();
+  });
+
+  /** A full cascade would otherwise ask for forty voices in one frame. */
+  it('caps how many beads can be heard in a single frame', () => {
+    const { w, st } = start();
+    for (let i = 0; i < 30; i++) {
+      w.onPointerDown(SIZE / 2, i % 2 === 0 ? 0 : SIZE);
+      pump(4);
+      expect(st.ticks).toBeLessThanOrEqual(4);
+    }
+    w.stop();
+  });
+});
+
+/** Kept in step with the board geometry in thumb-piano.ts. */
+const TINE_COUNT_HINT = 7;
+const BRIDGE_Y_HINT = 0.36 * SIZE;
+const TINE_SPACING_HINT = 0.098 * SIZE;
+/** Which note each tine sounds, left to right - lowest in the middle, climbing outwards. */
+const NOTE_OF_TINE_HINT = [6, 4, 2, 0, 1, 3, 5];
+
+interface PianoInternals {
+  tines: Array<{ ring: number; note: number; len: number }>;
+  onTine: number;
+}
+
+describe('ThumbPiano', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new ThumbPiano();
+    w.start(ctx, { width: SIZE, height: SIZE });
+    return { w, st: w as unknown as PianoInternals };
+  };
+
+  /** Middle of tine `i`, a little below the bridge where it is free to move. */
+  const on = (i: number) => ({
+    x: SIZE / 2 + (i - (TINE_COUNT_HINT - 1) / 2) * TINE_SPACING_HINT,
+    y: BRIDGE_Y_HINT + 0.1 * SIZE,
+  });
+
+  it('lays the notes out lowest in the middle, climbing outwards', () => {
+    const { st } = start();
+    expect(st.tines.map((t) => t.note)).toEqual(NOTE_OF_TINE_HINT);
+    // Longest tine sounds the lowest note, which is what makes the V shape mean something.
+    const longest = st.tines.indexOf(
+      st.tines.reduce((a, b) => (a.len >= b.len ? a : b)),
+    );
+    expect(st.tines[longest]!.note).toBe(0);
+  });
+
+  it('plucks the tine under the pointer', () => {
+    const { w, st } = start();
+    const p = on(2);
+    w.onPointerDown(p.x, p.y);
+    expect(st.tines[2]!.ring).toBe(1);
+    expect(st.tines.filter((t) => t.ring > 0)).toHaveLength(1);
+    w.stop();
+  });
+
+  it('plucks nothing above the bridge, where the tines are clamped', () => {
+    const { w, st } = start();
+    const p = on(3);
+    w.onPointerDown(p.x, BRIDGE_Y_HINT - 0.06 * SIZE);
+    expect(st.tines.every((t) => t.ring === 0)).toBe(true);
+    void p;
+    w.stop();
+  });
+
+  /**
+   * The point of the debounce: a sweep is a run of notes, and a pointer resting on one
+   * tine is a single note however many frames it sits there.
+   */
+  it('sounds a swept tine once, not once per frame', () => {
+    const { w, st } = start();
+    const p = on(1);
+    w.onPointerDown(p.x, p.y);
+    st.tines[1]!.ring = 0.5; // as if it had been decaying a while
+    for (let i = 0; i < 20; i++) {
+      w.onPointerMove(p.x, p.y);
+      pump(1);
+    }
+    // Re-plucking would have reset it to 1 rather than letting it fade.
+    expect(st.tines[1]!.ring).toBeLessThan(0.5);
+    w.stop();
+  });
+
+  it('sounds every tine a sweep crosses', () => {
+    const { w, st } = start();
+    w.onPointerDown(on(0).x, on(0).y);
+    for (let i = 1; i < TINE_COUNT_HINT; i++) {
+      const p = on(i);
+      w.onPointerMove(p.x, p.y);
+    }
+    expect(st.tines.every((t) => t.ring > 0)).toBe(true);
+    w.stop();
+  });
+
+  it('lets go when the pointer leaves the tines', () => {
+    const { w, st } = start();
+    const p = on(4);
+    w.onPointerDown(p.x, p.y);
+    expect(st.onTine).toBe(4);
+    w.onPointerMove(p.x, SIZE - 2);
+    expect(st.onTine).toBe(-1);
+    w.stop();
+  });
+
+  it('rings down to silence on its own', () => {
+    const { w, st } = start();
+    const p = on(3);
+    w.onPointerDown(p.x, p.y);
+    pump(120); // ~2s, past the ring time
+    expect(st.tines[3]!.ring).toBe(0);
+    w.stop();
+  });
+});
+
+/** Kept in step with MAX_ROUNDS and the ring geometry in simon.ts. */
+const SIMON_ROUNDS_HINT = 8;
+const SIMON_RING_HINT = (0.15 + 0.42) / 2;
+
+interface SimonInternals {
+  sequence: number[];
+  phase: 'showing' | 'input' | 'pause' | 'over';
+  result: 'win' | 'loss' | null;
+  step: number;
+  score: number;
+  auto: boolean;
+}
+
+describe('Simon', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new Simon();
+    const onDone = vi.fn();
+    w.start(ctx, { width: SIZE, height: SIZE, onDone });
+    return { w, onDone, st: w as unknown as SimonInternals };
+  };
+
+  /** The middle of a pad, in canvas coordinates. */
+  const pad = (i: number) => {
+    const r = SIMON_RING_HINT * SIZE;
+    const a = Math.PI + i * (Math.PI / 2) + Math.PI / 4;
+    return { x: SIZE / 2 + Math.cos(a) * r, y: SIZE / 2 + Math.sin(a) * r };
+  };
+
+  /** Run frames until the pads are accepting input. */
+  const toInput = (st: SimonInternals) => {
+    for (let i = 0; i < 400 && st.phase !== 'input'; i++) pump(1);
+    expect(st.phase).toBe('input');
+  };
+
+  it('starts a sequence immediately rather than waiting to be asked', () => {
+    const { st } = start();
+    expect(st.sequence).toHaveLength(1);
+    expect(st.phase).toBe('showing');
+  });
+
+  it('plays itself until you touch it', () => {
+    const { st } = start();
+    expect(st.auto).toBe(true);
+    pump(200);
+    // The autopilot answers correctly, so the sequence has to have grown.
+    expect(st.sequence.length).toBeGreaterThan(1);
+    expect(st.result).toBeNull();
+  });
+
+  it('hands the run over to you on the first touch, wherever it lands', () => {
+    const { w, st } = start();
+    w.onPointerDown(SIZE / 2, SIZE / 2); // the hub: a touch, but not a press
+    expect(st.auto).toBe(false);
+    expect(st.phase).not.toBe('over');
+  });
+
+  it('accepts a correct press and banks the round', () => {
+    const { w, st } = start();
+    toInput(st);
+    const p = pad(st.sequence[st.step]!);
+    w.onPointerDown(p.x, p.y);
+    expect(st.result).toBeNull();
+    expect(st.score).toBe(1);
+  });
+
+  it('ends the run on a wrong press, and hands over exactly once', () => {
+    const { w, onDone, st } = start();
+    toInput(st);
+    const p = pad((st.sequence[st.step]! + 1) % 4);
+    w.onPointerDown(p.x, p.y);
+
+    expect(st.phase).toBe('over');
+    expect(st.result).toBe('loss');
+    expect(onDone).not.toHaveBeenCalled();
+
+    pump(150); // past the result pause
+    expect(onDone).toHaveBeenCalledTimes(1);
+    pump(150);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A game is exempt from the cycle clock, so "waiting for a press that never comes" has
+   * to be an ending. Without this the widget would sit there for the rest of the day.
+   */
+  it('calls the run if you walk away mid-sequence', () => {
+    const { w, st } = start();
+    toInput(st);
+    w.onPointerDown(SIZE / 2, SIZE / 2); // switches the autopilot off without pressing
+    pump(400); // ~6.4s, comfortably past the patience window
+    expect(st.phase).toBe('over');
+    expect(st.result).toBe('loss');
+  });
+
+  it('ignores presses once the run is over', () => {
+    const { w, st } = start();
+    toInput(st);
+    const expected = st.sequence[st.step]!;
+    const wrong = pad((expected + 1) % 4);
+    w.onPointerDown(wrong.x, wrong.y);
+    const length = st.sequence.length;
+
+    const right = pad(expected);
+    w.onPointerDown(right.x, right.y);
+    expect(st.sequence).toHaveLength(length);
+    expect(st.result).toBe('loss');
+  });
+
+  it('is winnable - the autopilot runs it to the end and hands over once', () => {
+    const { onDone, st } = start();
+    pump(1400, 50); // ~70s: long enough for all eight rounds
+    expect(st.result).toBe('win');
+    expect(st.score).toBe(SIMON_ROUNDS_HINT);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Kept in step with the jar geometry in suika.ts. */
+const JAR_LEFT_HINT = 0.11 * SIZE;
+const JAR_RIGHT_HINT = 0.89 * SIZE;
+const JAR_FLOOR_HINT = 0.945 * SIZE;
+const SUIKA_TOP_TIER_HINT = 4;
+const SUIKA_RELOAD_HINT = 0.4;
+const SUIKA_DROPS_HINT = 26;
+
+interface SuikaFruit {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  tier: number;
+  age: number;
+}
+
+interface SuikaInternals {
+  fruit: SuikaFruit[];
+  bursts: unknown[];
+  score: number;
+  next: number;
+  reload: number;
+  over: boolean;
+  auto: boolean;
+  remaining: number;
+  radius(tier: number): number;
+}
+
+describe('Suika', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new Suika();
+    const onDone = vi.fn();
+    w.start(ctx, { width: SIZE, height: SIZE, onDone });
+    return { w, onDone, st: w as unknown as SuikaInternals };
+  };
+
+  /** Drop a fruit of a chosen tier at a chosen x, bypassing the random deal. */
+  const dropAt = (w: CanvasWidget, st: SuikaInternals, tier: number, x: number) => {
+    st.next = tier;
+    st.reload = 0;
+    w.onPointerDown(x, 0);
+  };
+
+  it('plays itself until the pointer arrives, then stops', () => {
+    const { w, st } = start();
+    pump(120); // ~2s of autopilot
+    expect(st.fruit.length).toBeGreaterThan(0);
+    expect(st.auto).toBe(true);
+
+    w.onPointerMove(SIZE / 2, SIZE / 2);
+    expect(st.auto).toBe(false);
+  });
+
+  it('drops a fruit where you clicked and lets it fall to the floor', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    dropAt(w, st, 0, SIZE * 0.5);
+    expect(st.fruit).toHaveLength(1);
+    const f = st.fruit[0]!;
+    expect(f.x).toBeCloseTo(SIZE * 0.5, 0);
+
+    pump(180); // 3s - plenty to settle
+    expect(f.y).toBeCloseTo(JAR_FLOOR_HINT - st.radius(f.tier), 0);
+  });
+
+  it('fuses two fruit of the same tier into one of the next', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    dropAt(w, st, 0, SIZE * 0.5);
+    pump(120);
+    dropAt(w, st, 0, SIZE * 0.5);
+    pump(180);
+
+    expect(st.fruit).toHaveLength(1);
+    expect(st.fruit[0]!.tier).toBe(1);
+    expect(st.score).toBeGreaterThan(0);
+  });
+
+  // Without a top of the ladder the jar can only ever fill, so a good run gets punished.
+  it('annihilates two of the top tier instead of growing past it', () => {
+    const { st } = start();
+    st.auto = false;
+    const r = st.radius(SUIKA_TOP_TIER_HINT);
+    const y = JAR_FLOOR_HINT - r;
+    st.fruit.length = 0;
+    st.fruit.push(
+      { x: SIZE / 2 - r * 0.6, y, vx: 0, vy: 0, tier: SUIKA_TOP_TIER_HINT, age: 5 },
+      { x: SIZE / 2 + r * 0.6, y, vx: 0, vy: 0, tier: SUIKA_TOP_TIER_HINT, age: 5 },
+    );
+
+    pump(4);
+    expect(st.fruit).toHaveLength(0);
+    expect(st.score).toBeGreaterThan(0);
+  });
+
+  it('keeps every fruit inside the jar however hard it is loaded', () => {
+    const { w, st } = start();
+    st.auto = false;
+    // Aim well outside the box on both sides, which the geometry test cannot do.
+    for (let i = 0; i < 12; i++) {
+      dropAt(w, st, i % 3, i % 2 === 0 ? -400 : SIZE * 3);
+      pump(30);
+    }
+    for (const f of st.fruit) {
+      const r = st.radius(f.tier);
+      expect(f.x).toBeGreaterThanOrEqual(JAR_LEFT_HINT + r - 1);
+      expect(f.x).toBeLessThanOrEqual(JAR_RIGHT_HINT - r + 1);
+      expect(f.y).toBeLessThanOrEqual(JAR_FLOOR_HINT - r + 1);
+    }
+  });
+
+  it('will not let a second fruit out until the reload has run', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    dropAt(w, st, 0, SIZE * 0.5);
+    expect(st.fruit).toHaveLength(1);
+    expect(st.reload).toBeCloseTo(SUIKA_RELOAD_HINT, 5);
+
+    w.onPointerDown(SIZE * 0.5, 0); // same frame, second click
+    expect(st.fruit).toHaveLength(1);
+  });
+
+  // A fruit is only over the line for as long as it takes to fall past it, so the run must
+  // not end the instant one crosses.
+  it('does not end on a fruit merely falling past the line', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+    dropAt(w, st, 0, SIZE * 0.5);
+    pump(120);
+    expect(st.over).toBe(false);
+  });
+
+  it('ends once the jar has overflowed, and hands over exactly once', () => {
+    const { st, onDone } = start();
+    st.auto = false;
+    // A column of settled fruit stacked well above the line.
+    const r = st.radius(SUIKA_TOP_TIER_HINT);
+    st.fruit.length = 0;
+    for (let i = 0; i < 5; i++) {
+      st.fruit.push({
+        x: SIZE / 2,
+        y: JAR_FLOOR_HINT - r - i * r * 2,
+        vx: 0,
+        vy: 0,
+        // Alternating tiers, so the stack cannot merge itself back down out of trouble.
+        tier: i % 2 === 0 ? SUIKA_TOP_TIER_HINT : SUIKA_TOP_TIER_HINT - 1,
+        age: 5,
+      });
+    }
+
+    pump(400, 30); // 12s: past the grace period and the result pause
+    expect(st.over).toBe(true);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    pump(200, 30);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The invariant the basket exists for.
+   *
+   * Suika proper is endless-until-you-lose, and two melons annihilating means a jar played
+   * even moderately well drains as fast as it fills. Before the basket, autopilot runs of
+   * four simulated minutes ended in overflow exactly zero times out of twenty-five - a
+   * self-paced widget that never reports done holds the window for the rest of the turn.
+   */
+  it('always ends, however well it is played', () => {
+    const { onDone, st } = start();
+    pump(4000, 30); // 2 simulated minutes of a jar that never overflows
+    expect(st.over).toBe(true);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops dealing once the basket is empty', () => {
+    const { w, st } = start();
+    st.auto = false;
+    for (let i = 0; i < SUIKA_DROPS_HINT + 6; i++) {
+      st.reload = 0;
+      w.onPointerDown(SIZE * 0.5, 0);
+    }
+    // Merges only ever reduce the count, so this is an upper bound on what was dealt.
+    expect(st.fruit.length).toBeLessThanOrEqual(SUIKA_DROPS_HINT);
+    expect(st.remaining).toBe(0);
+  });
+
+  it('takes no more drops once the jar is full', () => {
+    const { w, st } = start();
+    st.auto = false;
+    (st as unknown as { over: boolean }).over = true;
+    const count = st.fruit.length;
+    w.onPointerDown(SIZE * 0.5, 0);
+    expect(st.fruit).toHaveLength(count);
+  });
+});
+
+/** Kept in step with the fleet layout in space-invaders.ts. */
+const INVADER_ROWS_HINT = 3;
+const INVADER_COLS_HINT = 6;
+const SHIP_Y_HINT = 0.88 * SIZE;
+
+interface InvadersInternals {
+  invaders: Array<{ col: number; row: number; alive: boolean }>;
+  bullets: Array<{ x: number; y: number }>;
+  bombs: Array<{ x: number; y: number }>;
+  fleetX: number;
+  fleetY: number;
+  dir: number;
+  wave: number;
+  lives: number;
+  score: number;
+  shipX: number;
+  pointerX: number | null;
+  phase: 'playing' | 'dead' | 'clear' | 'over';
+  result: 'win' | 'loss' | null;
+}
+
+describe('SpaceInvaders', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const w = new SpaceInvaders();
+    const onDone = vi.fn();
+    w.start(ctx, { width: SIZE, height: SIZE, onDone });
+    return { w, onDone, st: w as unknown as InvadersInternals };
+  };
+
+  /** Frames with the sky swept clear, so only the test decides when the ship is hit. */
+  const wait = (st: InvadersInternals, frames: number) => {
+    for (let i = 0; i < frames; i++) {
+      st.bombs = [];
+      pump(1);
+    }
+  };
+
+  const bombTheShip = (st: InvadersInternals) => {
+    st.bombs = [{ x: st.shipX, y: SHIP_Y_HINT }];
+    pump(2);
+  };
+
+  it('opens with a full fleet', () => {
+    const { st } = start();
+    expect(st.invaders).toHaveLength(INVADER_ROWS_HINT * INVADER_COLS_HINT);
+    expect(st.invaders.every((i) => i.alive)).toBe(true);
+  });
+
+  it('marches to the wall, turns, and drops a row', () => {
+    const { st } = start();
+    const startY = st.fleetY;
+    const startDir = st.dir;
+
+    let turned = false;
+    for (let i = 0; i < 900 && !turned; i++) {
+      pump(1);
+      turned = st.dir !== startDir;
+    }
+    expect(turned).toBe(true);
+    expect(st.fleetY).toBeGreaterThan(startY);
+  });
+
+  it('plays itself: the ship aims and fires without being touched', () => {
+    const { st } = start();
+    expect(st.pointerX).toBeNull();
+    pump(600);
+    expect(st.score).toBeGreaterThan(0);
+  });
+
+  it('hands steering over to the pointer', () => {
+    const { w, st } = start();
+    w.onPointerMove(60, 0);
+    expect(st.pointerX).toBe(60);
+    pump(40);
+    expect(Math.abs(st.shipX - 60)).toBeLessThan(6);
+  });
+
+  it('clears a wave, brings the next one in, and wins on the last', () => {
+    const { onDone, st } = start();
+
+    for (const inv of st.invaders) inv.alive = false;
+    pump(2);
+    expect(st.phase).toBe('clear');
+
+    wait(st, 120); // past the pause between waves
+    expect(st.wave).toBe(2);
+    expect(st.invaders.every((i) => i.alive)).toBe(true);
+
+    for (const inv of st.invaders) inv.alive = false;
+    pump(2);
+    expect(st.result).toBe('win');
+    expect(onDone).not.toHaveBeenCalled();
+
+    pump(150); // past the result pause
+    expect(onDone).toHaveBeenCalledTimes(1);
+    pump(150);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('spends three lives, then ends the run and hands over exactly once', () => {
+    const { onDone, st } = start();
+    expect(st.lives).toBe(3);
+
+    bombTheShip(st);
+    expect(st.lives).toBe(2);
+    expect(st.phase).toBe('dead');
+    wait(st, 80); // past the pause after a lost life
+    expect(st.phase).toBe('playing');
+
+    bombTheShip(st);
+    expect(st.lives).toBe(1);
+    wait(st, 80);
+
+    bombTheShip(st);
+    expect(st.lives).toBe(0);
+    expect(st.result).toBe('loss');
+
+    pump(150); // past the result pause
+    expect(onDone).toHaveBeenCalledTimes(1);
+    pump(150);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  // Spending a life on a landed fleet would just replay the same frame: there is nowhere
+  // left to stand, so it takes the whole run at once.
+  it('ends outright when the fleet reaches the ship, whatever lives are left', () => {
+    const { st } = start();
+    st.fleetY = SHIP_Y_HINT;
+    pump(2);
+    expect(st.lives).toBe(0);
+    expect(st.result).toBe('loss');
   });
 });

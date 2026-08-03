@@ -24,6 +24,8 @@ export class WidgetWindow {
     private readonly rendererPath: string,
     private readonly preloadPath: string,
     private readonly onPositionChanged: (pos: { x: number; y: number }) => void,
+    /** Read per show, not captured once, so a config edit lands on the next appearance. */
+    private readonly isSoundEnabled: () => boolean = () => false,
   ) {}
 
   /**
@@ -131,7 +133,12 @@ export class WidgetWindow {
     );
 
     this.win.setBounds({ x, y, width: this.bounds.width, height: this.bounds.height });
-    this.win.webContents.send('arcade:show', { widgetId, generation, ...this.bounds });
+    this.win.webContents.send('arcade:show', {
+      widgetId,
+      generation,
+      ...this.bounds,
+      soundEnabled: this.isSoundEnabled(),
+    });
   }
 
   show(widgetId: string, generation: number): void {

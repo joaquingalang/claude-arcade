@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 import { WidgetCanvas } from './WidgetCanvas';
+import { setSoundEnabled, suspendSound } from './audio';
 import { useArcadeStore } from './store';
 
 /** Height of the drag strip along the top edge. */
@@ -10,8 +11,16 @@ export function App() {
   const { widgetId, generation, width, height, visible, setWidget, hide } = useArcadeStore();
 
   useEffect(() => {
-    window.arcade.onShow((p) => setWidget(p.widgetId, p.generation, p.width, p.height));
-    window.arcade.onHide(() => hide());
+    window.arcade.onShow((p) => {
+      // Applied before the widget mounts, so the samples are decoding while the first
+      // bubble is still being drawn.
+      setSoundEnabled(p.soundEnabled);
+      setWidget(p.widgetId, p.generation, p.width, p.height);
+    });
+    window.arcade.onHide(() => {
+      suspendSound();
+      hide();
+    });
   }, [setWidget, hide]);
 
   return (

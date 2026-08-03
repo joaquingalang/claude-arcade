@@ -4,8 +4,9 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { readRuntimeFile } from '@claude-arcade/shared';
+import { GAME_IDS, TOY_IDS, readRuntimeFile, type PlayRequest } from '@claude-arcade/shared';
 
+import { parseCommand, resolveWidgetId } from './commands';
 import { buildHookSettings, serializeHookSettings } from './hook-settings';
 import { ensureApp, fetchStatus, pingApp, resolveAppLaunch } from './ensure-app';
 import { postJson } from './notify';
@@ -110,6 +111,11 @@ async function doctor(): Promise<number> {
     const status = reachable ? await fetchStatus(rt.port) : null;
     if (status) {
       process.stdout.write(`  widget visible    : ${status.widgetVisible ? 'yes' : 'no'}\n`);
+      // Only when something is being played by hand: on a normal run there is nothing to
+      // say here, and a line reading `none` would just be noise in the common case.
+      if (status.playing) {
+        process.stdout.write(`  playing           : ${status.playing} (arcade play)\n`);
+      }
       process.stdout.write(`  active sessions   : ${status.sessions.length}\n`);
       for (const s of status.sessions) {
         process.stdout.write(`    - ${s.sessionId.slice(0, 8)} ${s.state}\n`);
@@ -125,6 +131,93 @@ async function doctor(): Promise<number> {
     process.stdout.write('\n  The app is not running. It starts automatically on the next `arcade` run.\n');
   }
   return healthy ? 0 : 1;
+}
+
+/** The menu, printed by `arcade list` and by a `play` that couldn't pick a widget. */
+function widgetMenu(): string {
+  return [
+    'Fidget toys - they stay up until you take them away:',
+    ...TOY_IDS.map((id) => `  ${id}`),
+    '',
+    'Games - they run to their own ending, then start again:',
+    ...GAME_IDS.map((id) => `  ${id}`),
+    '',
+  ].join('\n');
+}
+
+/**
+ * Put one widget on screen and leave it there.
+ *
+ * The only command that shows a widget with no Claude session behind it at all, which is
+ * why it starts the app if it has to: someone typing `arcade play snake` wants a snake,
+ * not a report that the app isn't up.
+ */
+async function play(name: string | null): Promise<number> {
+  if (name === null) {
+    process.stderr.write('arcade play: name a widget - for example `arcade play snake`.\n\n');
+    process.stdout.write(widgetMenu());
+    return 2;
+  }
+
+  const match = resolveWidgetId(name);
+  if (match.found === null) {
+    if (match.candidates.length > 0) {
+      process.stderr.write(
+        `arcade play: "${name}" could be ${match.candidates.join(', ')}. Say which.\n`,
+      );
+    } else {
+      process.stderr.write(`arcade play: no widget called "${name}".\n\n`);
+      process.stdout.write(widgetMenu());
+    }
+    return 2;
+  }
+
+  const rt = await ensureApp();
+  if (!rt) {
+    process.stderr.write(
+      'arcade play: the widget app could not be started. Run `arcade doctor` to see why.\n',
+    );
+    return 1;
+  }
+
+  const body: PlayRequest = { widgetId: match.found };
+  await postJson(rt.port, '/play', body);
+
+  // The POST is fire-and-forget by design, so confirm from /status rather than assuming.
+  // A running app that doesn't know the widget is showing is almost always one built
+  // before this command existed.
+  const status = await fetchStatus(rt.port);
+  if (status && status.playing !== match.found) {
+    process.stderr.write(
+      `arcade play: the app did not take ${match.found}. If it is an older build, run \`npm run build\`.\n`,
+    );
+    return 1;
+  }
+
+  process.stdout.write(
+    `playing ${match.found} - dismiss it in the corner, or run \`arcade stop\`.\n`,
+  );
+  return 0;
+}
+
+/**
+ * Take a played widget back off screen.
+ *
+ * Deliberately does not start the app the way `play` does. Launching a desktop app in
+ * order to tell it to show nothing is not a thing anyone wanted.
+ */
+async function stopPlaying(): Promise<number> {
+  const rt = readRuntimeFile();
+  if (!rt || !(await pingApp(rt.port))) {
+    process.stdout.write('nothing playing - the widget app is not running.\n');
+    return 0;
+  }
+
+  await postJson(rt.port, '/stop-playing', {});
+  // Whatever Claude is doing takes the window back from here, which may mean it stays up
+  // with a different widget in it.
+  process.stdout.write('stopped.\n');
+  return 0;
 }
 
 /**
@@ -193,34 +286,45 @@ async function runClaude(userArgs: string[], withWidget: boolean): Promise<numbe
   return exitCode;
 }
 
+function help(): number {
+  process.stdout.write(
+    [
+      'arcade - run Claude Code with a procrastination widget',
+      '',
+      'Usage:',
+      '  arcade [claude args...]     run claude, showing a widget while it works',
+      '  arcade --no-widget [...]    run claude unwrapped',
+      '  arcade play <widget>        put one widget on screen now and leave it there',
+      '  arcade stop                 take a played widget back off screen',
+      '  arcade list                 the widgets you can play',
+      '  arcade doctor               check that everything is wired up',
+      '',
+      'All other arguments are passed through to claude untouched.',
+      '',
+    ].join('\n'),
+  );
+  return 0;
+}
+
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+  const command = parseCommand(process.argv.slice(2));
 
-  if (argv[0] === 'doctor') {
-    process.exit(await doctor());
+  // Every arm exits; process.exit() returns never, so there is nothing to fall through to.
+  switch (command.kind) {
+    case 'help':
+      process.exit(help());
+    case 'doctor':
+      process.exit(await doctor());
+    case 'list':
+      process.stdout.write(widgetMenu());
+      process.exit(0);
+    case 'play':
+      process.exit(await play(command.name));
+    case 'stop':
+      process.exit(await stopPlaying());
+    case 'claude':
+      process.exit(await runClaude(command.args, command.withWidget));
   }
-
-  if (argv[0] === '--help' || argv[0] === '-h') {
-    process.stdout.write(
-      [
-        'arcade - run Claude Code with a procrastination widget',
-        '',
-        'Usage:',
-        '  arcade [claude args...]     run claude, showing a widget while it works',
-        '  arcade --no-widget [...]    run claude unwrapped',
-        '  arcade doctor               check that everything is wired up',
-        '',
-        'All other arguments are passed through to claude untouched.',
-        '',
-      ].join('\n'),
-    );
-    process.exit(0);
-  }
-
-  const withWidget = argv[0] !== '--no-widget';
-  const userArgs = withWidget ? argv : argv.slice(1);
-
-  process.exit(await runClaude(userArgs, withWidget));
 }
 
 main().catch((err) => {

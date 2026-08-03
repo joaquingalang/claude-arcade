@@ -51,6 +51,11 @@ export async function pingApp(port: number, timeoutMs = 1000): Promise<boolean> 
 export interface AppStatus {
   widgetVisible: boolean;
   widgetId: string;
+  /**
+   * The widget someone put up with `arcade play`, or null for the ordinary case where
+   * the window follows the sessions. Optional because an older app won't send it.
+   */
+  playing?: string | null;
   sessions: Array<{ sessionId: string; state: string; cwd?: string }>;
 }
 

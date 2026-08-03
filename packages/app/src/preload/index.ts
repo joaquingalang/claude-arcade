@@ -10,6 +10,13 @@ export interface ShowPayload {
   /** The window box the main process just sized itself to, in CSS pixels. */
   width: number;
   height: number;
+  /**
+   * Whether widgets may make noise, read fresh from config.json on every show.
+   *
+   * Sent with the show rather than once at startup so editing the file takes effect on
+   * the next appearance instead of the next launch.
+   */
+  soundEnabled: boolean;
 }
 
 export interface ArcadeBridge {
@@ -22,6 +29,13 @@ export interface ArcadeBridge {
   dragEnd(): void;
   dismiss(): void;
   widgetDone(widgetId: string): void;
+  /**
+   * The bytes of one sound sample, or null if it is not installed.
+   *
+   * The renderer runs on a `file://` origin, where `fetch` refuses the scheme, so the
+   * main process does the reading - see main/samples.ts.
+   */
+  readSample(name: string): Promise<Uint8Array | null>;
 }
 
 /**
@@ -50,6 +64,7 @@ const bridge: ArcadeBridge = {
   dragEnd: () => ipcRenderer.send('arcade:drag-end'),
   dismiss: () => ipcRenderer.send('arcade:dismiss'),
   widgetDone: (widgetId) => ipcRenderer.send('arcade:widget-done', widgetId),
+  readSample: (name) => ipcRenderer.invoke('arcade:read-sample', name),
 };
 
 contextBridge.exposeInMainWorld('arcade', bridge);

@@ -45,6 +45,11 @@ arcade --no-widget           # plain claude, no widget
 arcade doctor                # check the wiring
 ```
 
+Five words are the wrapper's own - `play`, `stop`, `list`, `doctor` and `--no-widget` -
+and only in first position, so `arcade -p "play snake"` is still a prompt for Claude. If
+you want the `claude` subcommand of the same name, `arcade --no-widget doctor` gets you
+there.
+
 `arcade doctor` is the one command to run after linking. `status : ready` means the CLI
 found `claude`, found the app package, and got a `/ping` back:
 
@@ -189,13 +194,120 @@ CLI holds the same line - `ensureApp()` returning null means "run Claude unwrapp
 | `bubble-wrap` | click or drag to pop; refills when empty | never - on the clock |
 | `fidget-spinner` | drag to flick; friction spins it down | never - on the clock |
 | `newtons-cradle` | drag a ball out and release | never - on the clock |
+| `falling-sand` | drag to pour; it piles and avalanches | never - on the clock |
+| `rain-stick` | drag to tip it; the beads pour and clatter | never - on the clock |
+| `thumb-piano` | sweep across the tines to pluck them | never - on the clock |
 | `snake` | arrow keys, or point where you want it to go | 3 lives spent |
 | `flappy-bird` | click to flap | 3 lives spent |
 | `pong` | move the pointer to slide your paddle | someone reaches 5 |
+| `simon` | click the pads back in the order they flashed | a wrong pad, or 8 rounds |
+| `suika` | point to aim, click to drop; same fruit fuse | the basket empties, or the jar overflows |
+| `space-invaders` | the pointer steers; the ship fires itself | 2 waves cleared, or 3 lives |
 
 The fidget toys are driven by the pointer alone, because the window never has keyboard
-focus. Snake and Pong play themselves until you touch them - a toy that sits still until
-instructed is a chore.
+focus. Snake, Pong, Simon, Suika and Space Invaders play themselves until you touch them -
+a toy that sits still until instructed is a chore. Suika's autopilot aims at whatever the
+queued fruit could merge with and ignores everything else, which is deliberately mediocre
+play: a demo that never loses would be a demo you have to watch.
+
+### Playing one on purpose
+
+The rotation decides what shows up while Claude works. `arcade play` is the override, for
+when you want a particular one now:
+
+```bash
+arcade list                  # the ids you can play
+arcade play snake            # put it up and leave it up
+arcade play Suika            # ids are matched loosely - see below
+arcade stop                  # hand the window back
+```
+
+`arcade play` is the one command that shows a widget with no Claude session behind it at
+all, so it starts the app if the app isn't running. Nothing else about it is special-cased:
+the same window, the same widget, the same dismiss button.
+
+It **outranks session state in both directions**. The widget appears with nothing working,
+and it stays put through a turn that would otherwise have rotated it away. That asymmetry
+is the point - `arcade play snake` is someone deciding they want a game, not a hint about
+what to show next time Claude is busy - and it is why nothing but a dismissal or
+`arcade stop` takes it back. A game played this way restarts in place when it ends, the
+same as a pinned one.
+
+`arcade stop` gives the window back to whatever the sessions want, which is not the same
+as hiding it: stop it mid-turn and a fresh widget takes over from the rotation. The
+dismiss button in the corner is the way to get rid of it outright. Unlike `play`, `stop`
+never starts the app - launching a desktop app to tell it to show nothing is not a thing
+anyone wanted.
+
+Ids are matched loosely, because remembering where the hyphens go in `space-invaders` is
+not a skill worth having. Case and punctuation are ignored, then a prefix is tried, then
+any fragment - but each step only counts if it lands on exactly one widget:
+
+```
+Flappy Bird, flap                -> flappy-bird
+space_invaders, invaders         -> space-invaders
+s                                -> "s" could be snake, simon, suika, space-invaders.
+                                    Say which.
+```
+
+Guessing between four games is worse than naming the four. An id that matches nothing
+gets the full list instead, since there is nothing useful to suggest.
+
+`arcade doctor` grows a `playing` line while a hand-picked widget is up, and says nothing
+there otherwise.
+
+### Sound
+
+Everything is silent by default, and that default is the important part: a desk toy that
+beeps while you are on a call is a toy you uninstall. It is also what decided Simon's
+shape - Simon is the rare memory game where the tone duplicates the colour rather than
+carrying half the information, so it plays correctly with nothing to hear.
+
+Three widgets make a noise, and they split two ways.
+
+**Bubble wrap plays samples**, because popping is the interaction where the sound *is* the
+point and a real pop is full of detail no oscillator will reproduce. Drop four files named
+`pop-1.mp3` through `pop-4.mp3` into `packages/app/src/renderer/public/sounds/` - see the
+README in that directory for what makes a good sample. Missing files are not an error: each
+is loaded independently and failures are skipped, so an install with no samples pops
+silently rather than breaking.
+
+**The rain stick and thumb piano synthesise**, and that is a deliberate split rather than
+an inconsistency. The thumb piano's pitches *are* the toy, so a missing sample set would
+not make it duller, it would make it pointless - and seven tuned files is a lot to ask
+before anything can be heard at all. Synthesis makes it correct by construction and audible
+the moment sound is switched on. The rain stick follows because a bead striking a baffle is
+a band-passed noise transient with a 30ms decay, which is nearly everything there is to say
+about it.
+
+Turn it all on with `"soundEnabled": true` in `config.json`; the flag is read on every
+appearance, so the edit lands on the next show rather than the next launch.
+
+The thumb piano is tuned to a **major pentatonic** scale, and that is load-bearing rather
+than a taste call. Its tines are plucked in whatever order a pointer happens to cross them,
+so every interval the scale admits gets played constantly, by accident. Pentatonic has no
+semitones and no tritone, which is exactly the property that makes each of those accidents
+consonant. It is also what let the tines keep their traditional layout - a real kalimba runs
+lowest in the middle and climbs alternately outwards, so left to right is *not* a scale, and
+under any other tuning a sweep would sound like a mistake rather than a run.
+
+All of it shares one `AudioContext`. Three would be three devices held open for a window
+that only ever shows one toy, and `suspendSound()` would need a list of them that the next
+noisy widget would quietly fall off. One context means hiding the window silences
+everything by construction.
+
+The samples are read by the **main** process and passed over IPC, which looks like a
+detour and is not one. The packaged renderer is loaded with `loadFile`, so its origin is
+`file://`, and Chromium's `fetch` refuses that scheme outright - not a CORS failure that
+could be waved through. `main/samples.ts` does the reading, and takes a bare audio
+filename resolving inside the sounds directory and nothing else. The dev harness is served
+over http and fetches directly, so both origins work.
+
+Playback is Web Audio rather than `new Audio()`, so a drag across the sheet overlaps
+voices instead of cutting the previous pop off, and each voice gets a few percent of pitch
+and level jitter - four samples alone are not enough to stop a fast sweep sounding like
+one sample on a loop. Voices are capped at six, gain sits at a third of full scale, and
+the audio context is suspended when the widget hides.
 
 ### Snake and the arrow keys
 
@@ -218,9 +330,13 @@ so turning the grab off leaves a fully playable toy rather than a broken one. Wa
 wrap: self-collision is the only way to die.
 
 Adding one is a new file in `packages/app/src/renderer/widgets/`, an entry in
-`registry.ts`, and an id in `main/widget-ids.ts`. The last of those is easy to forget:
+`registry.ts`, and an id in `shared/src/widgets.ts`. The last of those is easy to forget:
 main can't import the renderer registry without pulling React into the main process, so
-the two lists are kept in sync by a test rather than by the type system.
+the two lists are kept in sync by a test rather than by the type system. The ids sit in
+`shared` rather than in the app because `arcade play` needs them too - it has to know an
+id is real before it posts it, and to print the list without starting an Electron app to
+ask. `main/widget-ids.ts` re-exports them alongside the part only main has an opinion
+about: pacing, window size, and rotation order.
 
 A widget that should run to an end rather than to the clock goes in `SELF_PACED` in the
 same file and calls the inherited `finish()` when its run is over. `finish()` is latched,
@@ -248,13 +364,26 @@ turn full of tool calls can't keep resetting it. Pin `widget` to a specific id a
 stays put - a pinned widget is a choice, not a suggestion.
 
 **How long each toy gets depends on which kind it is.** The fidget toys have no end state,
-so the clock moves them along after `cycleMs`. The three games do have one, and they keep
-the screen until they reach it: three lives for Snake and Flappy Bird, first to five for
-Pong. Being pulled off court at 4-3 is worse than never having played, which is the whole
-reason for the split - a game interrupted by a timer wastes the time it was meant to fill.
-The flip side is that a game has to actually end: Pong's ball gains speed on every paddle
-hit *and* carries that escalation into the next serve, so a match winds itself up towards
-a result rather than settling into rallies that never resolve.
+so the clock moves them along after `cycleMs`. The games do have one, and they keep the
+screen until they reach it: three lives for Snake, Flappy Bird and Space Invaders, first
+to five for Pong, a basket of 26 fruit for Suika. Being pulled off court at 4-3 is worse
+than never having played, which is the whole reason for the split - a game interrupted by
+a timer wastes the time it was meant to fill.
+
+The flip side is that a game has to actually end, and each one carries its own escalation
+to make sure it does. Pong's ball gains speed on every paddle hit *and* carries that into
+the next serve. The invader fleet marches faster the fewer of them are left, so the last
+one alive is the hard one. Simon is the awkward case - it can end by being *ignored* - so a
+run that is waiting for a press that never comes gives up after a few seconds rather than
+sitting there all day.
+
+Suika is the case where that had to be *measured* rather than assumed. The original is
+endless-until-you-lose, and it looked like the jar filling up was ending enough - but two
+melons annihilate, so a jar played even moderately well drains as fast as it fills and
+settles into equilibrium. Twenty-five autopilot runs of four simulated minutes each ended
+in overflow exactly zero times. The fixed basket is what actually bounds the run, and the
+overflow line is now the way to lose *early* rather than the only way to finish. A test
+holds that line: `always ends, however well it is played`.
 
 A finished game reports in and the cycle moves on. When rotation is off - a pinned widget,
 or `cycleMs: 0` - it restarts in place instead, because leaving a dead board up for the
@@ -280,7 +409,7 @@ All of it lives in `config.json` under Electron's `userData` directory:
 | `cycleMs` | `15000` | time on screen per fidget toy; `0` disables cycling. Games ignore it |
 | `snakeKeyboard` | `true` | let Snake take the arrow keys system-wide while it is on screen |
 | `position` | `null` | where you dragged it; `null` means bottom-right of the work area |
-| `soundEnabled` | `false` | reserved - nothing reads it yet |
+| `soundEnabled` | `false` | let widgets make a noise - bubble wrap, rain stick, thumb piano. Read on every show |
 
 ## When the widget shows
 
@@ -316,7 +445,7 @@ would sit on screen forever waiting for a turn that already died.
 
 ```
 packages/
-  shared/   protocol types, reserved port range, runtime.json helpers
+  shared/   protocol types, widget ids, reserved port range, runtime.json helpers
   cli/      the `arcade` command
   app/      Electron main + preload + a React shell around one 2D canvas
 tests/      vitest, run against source
@@ -325,7 +454,7 @@ tests/      vitest, run against source
 ## Development
 
 ```bash
-npm test                  # 142 tests across 6 files
+npm test                  # 277 tests across 9 files
 npm run typecheck
 npm run build
 npm run link                 # rebuild and refresh the global `arcade` command

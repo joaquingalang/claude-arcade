@@ -1,3 +1,4 @@
+import { pops } from '../audio';
 import { CanvasWidget } from './types';
 
 const COLS = 6;
@@ -9,11 +10,11 @@ const TAU = Math.PI * 2;
  * The bubble does not animate down - it is a dimple from the first frame, and this is
  * only how long the ring that leaves it takes to travel out and fade.
  */
-const POP_DURATION = 0.3;
+const POP_DURATION = 0.26;
 /** Pause before the sheet refills, so the last pop is savoured rather than erased. */
 const REFILL_DELAY = 0.8;
 /** Bits of film thrown off by the burst. */
-const SPECKS = 7;
+const SPECKS = 5;
 
 interface Bubble {
   cx: number;
@@ -135,14 +136,18 @@ export class BubbleWrap extends CanvasWidget {
     // Muzzle flash: a hot disc over the fresh dimple that *grows* as it dies. Growing
     // matters - a flash that shrank would read as the bubble sucking inwards, which is
     // the one thing a pop must never look like. Gone in a few frames.
-    if (t < 0.22) {
-      const f = 1 - t / 0.22;
-      const rad = b.r * (0.8 + 0.5 * (1 - f));
+    //
+    // Kept deliberately dim. This fires once per bubble and a sweep sets off a dozen of
+    // them in a second, so a flash bright enough to be striking on its own is a strobe in
+    // the corner of the eye at the rate it actually happens.
+    if (t < 0.18) {
+      const f = 1 - t / 0.18;
+      const rad = b.r * (0.72 + 0.3 * (1 - f));
       // Blue-cored rather than pure white: the widget floats over whatever wallpaper the
       // user has, and a white flash on a pale desktop is no flash at all.
       const g = ctx.createRadialGradient(b.cx, b.cy, 0, b.cx, b.cy, rad);
-      g.addColorStop(0, `rgba(255,255,255,${0.85 * f * f})`);
-      g.addColorStop(0.6, `rgba(198,222,255,${0.6 * f * f})`);
+      g.addColorStop(0, `rgba(255,255,255,${0.34 * f * f})`);
+      g.addColorStop(0.6, `rgba(198,222,255,${0.22 * f * f})`);
       g.addColorStop(1, `rgba(120,160,220,0)`);
       ctx.beginPath();
       ctx.arc(b.cx, b.cy, rad, 0, TAU);
@@ -152,8 +157,8 @@ export class BubbleWrap extends CanvasWidget {
 
     // Leading ring, then a fainter one a beat behind it. Radius eases out and the fade
     // is quadratic, so the wave leaves fast and thins as it goes.
-    this.drawRing(b, t, 0.95);
-    this.drawRing(b, (t - 0.18) / 0.82, 0.4);
+    this.drawRing(b, t, 0.5);
+    this.drawRing(b, (t - 0.18) / 0.82, 0.18);
     this.drawSpecks(b, t);
   }
 
@@ -165,34 +170,37 @@ export class BubbleWrap extends CanvasWidget {
     const fade = (1 - t) ** 2;
 
     ctx.beginPath();
-    ctx.arc(b.cx, b.cy, b.r * (0.85 + ease * 1.9), 0, TAU);
+    // Stops just short of 2r, which is inside the bubble's own cell - the gap between two
+    // centres is about 2.4r. A wave that reaches its neighbours makes a sweep read as one
+    // continuous flare across the sheet instead of a row of separate pops.
+    ctx.arc(b.cx, b.cy, b.r * (0.85 + ease * 1.05), 0, TAU);
     // Two passes over the same circle: a steel halo under a white core. The halo is what
     // keeps the wave readable against a light desktop, the core is what makes it snap.
     ctx.strokeStyle = `rgba(92,130,190,${alpha * fade * 0.5})`;
-    ctx.lineWidth = 4.5 * fade + 1.2;
+    ctx.lineWidth = 2.2 * fade + 0.7;
     ctx.stroke();
     ctx.strokeStyle = `rgba(255,255,255,${alpha * fade})`;
-    ctx.lineWidth = 2.4 * fade + 0.5;
+    ctx.lineWidth = 1.3 * fade + 0.4;
     ctx.stroke();
   }
 
   /** A short burst of film flecks, thrown out along the wave. */
   private drawSpecks(b: Bubble, t: number): void {
-    if (t >= 0.75) return;
+    if (t >= 0.6) return;
     const ctx = this.ctx;
-    const k = t / 0.75;
+    const k = t / 0.6;
     const ease = 1 - (1 - k) ** 2;
     const fade = (1 - k) ** 2;
 
-    ctx.fillStyle = `rgba(126,164,220,${0.7 * fade})`;
+    ctx.fillStyle = `rgba(126,164,220,${0.38 * fade})`;
     for (let i = 0; i < SPECKS; i++) {
       // Jittered by the bubble's own phase, in angle *and* in speed. Flecks that all
       // travel at one speed stop reading as debris and start reading as a dashed ring.
       const a = b.wobble + (i / SPECKS) * TAU + Math.sin(b.wobble + i * 2.1) * 0.35;
       const reach = 0.75 + 0.5 * (0.5 + 0.5 * Math.sin(b.wobble * 3.1 + i * 1.7));
-      const d = b.r * (0.55 + ease * 1.6 * reach);
+      const d = b.r * (0.55 + ease * 0.95 * reach);
       ctx.beginPath();
-      ctx.arc(b.cx + Math.cos(a) * d, b.cy + Math.sin(a) * d, b.r * 0.07 * fade + 0.3, 0, TAU);
+      ctx.arc(b.cx + Math.cos(a) * d, b.cy + Math.sin(a) * d, b.r * 0.05 * fade + 0.25, 0, TAU);
       ctx.fill();
     }
   }
@@ -266,6 +274,9 @@ export class BubbleWrap extends CanvasWidget {
       if (dx * dx + dy * dy <= b.r * b.r) {
         b.popped = true;
         b.popT = 0;
+        // Fired from here rather than from the draw of the shockwave: the sound has to
+        // land on the frame the bubble gives way, and the wave outlives that by 0.3s.
+        pops.play();
         return;
       }
     }

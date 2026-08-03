@@ -1,19 +1,20 @@
 /**
- * Widget ids known to the main process.
+ * How the main process paces and sizes the widgets it knows about.
  *
- * Kept separate from the renderer registry so the main process never imports renderer
- * code (which pulls in React and the DOM). Adding a widget means one entry here and one
+ * The ids themselves live in `@claude-arcade/shared`, because `arcade play` needs them
+ * too; they are re-exported here so that everything main-side still has one import for
+ * "widget ids and what to do with them". What stays here is the part only main has an
+ * opinion about: which widgets end by themselves, which want the arrow keys, how big
+ * their window is, and what order they come up in.
+ *
+ * Kept out of the renderer registry so the main process never imports renderer code
+ * (which pulls in React and the DOM). Adding a widget means one entry in shared and one
  * in the renderer registry.
  */
-/** The fidget toys: no end state, so the clock moves them along. */
-export const TOY_IDS = ['bubble-wrap', 'fidget-spinner', 'newtons-cradle'] as const;
+import { GAME_IDS, TOY_IDS, WIDGET_IDS, type WidgetId } from '@claude-arcade/shared';
 
-/** The games: they run to their own ending and report in when they get there. */
-export const GAME_IDS = ['snake', 'flappy-bird', 'pong'] as const;
-
-export const WIDGET_IDS = [...TOY_IDS, ...GAME_IDS] as const;
-
-export type WidgetId = (typeof WIDGET_IDS)[number];
+export { GAME_IDS, TOY_IDS, WIDGET_IDS };
+export type { WidgetId };
 
 /**
  * Widgets that decide for themselves when their turn is over.
@@ -21,7 +22,7 @@ export type WidgetId = (typeof WIDGET_IDS)[number];
  * The fidget toys have no end state, so a clock is the only sensible way to move on. A
  * game does have one, and cutting it off mid-play at fifteen seconds is worse than not
  * showing it at all - you are left mid-rally with no idea whether you were winning.
- * These three report in when they are finished and the cycle waits for that instead.
+ * They report in when they are finished and the cycle waits for that instead.
  */
 const SELF_PACED = new Set<string>(GAME_IDS);
 
@@ -78,8 +79,9 @@ type Kind = 'toy' | 'game';
  * lap of its bag, so the counts stay level however long the session runs, while the order
  * inside a lap is still unguessable.
  *
- * Alternation is what keeps the two kinds level with each other: with three of each, one
- * toy then one game means every one of the six comes up a sixth of the time.
+ * Alternation is what keeps the two kinds level with each other: with the same number of
+ * each, one toy then one game means every widget comes up equally often. That is the
+ * whole reason a test enforces the two lists being the same length.
  *
  * The alternation deliberately survives the widget being hidden - it is not reset when
  * the window reappears. Restarting at a toy each time would mean short turns, which show
@@ -123,8 +125,8 @@ export class WidgetRotation {
    *
    * Without that guard the seam between two laps is the one place a repeat can happen -
    * Pong finishing and Pong starting again is the sort of thing that reads as broken.
-   * Reshuffling rather than swapping keeps the ordering unbiased, and with three ids per
-   * kind it retries at most a couple of times.
+   * Reshuffling rather than swapping keeps the ordering unbiased, and it retries only
+   * when the reshuffle happens to open on the same id - one time in six per kind.
    */
   private refill(kind: Kind): string[] {
     const source = kind === 'toy' ? TOY_IDS : GAME_IDS;

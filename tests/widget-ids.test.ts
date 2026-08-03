@@ -102,16 +102,32 @@ describe('widget kinds', () => {
 });
 
 describe('isSelfPaced', () => {
-  it('exempts the three games from the cycle clock', () => {
-    expect(isSelfPaced('snake')).toBe(true);
-    expect(isSelfPaced('flappy-bird')).toBe(true);
-    expect(isSelfPaced('pong')).toBe(true);
+  // Named one by one rather than derived from GAME_IDS: a test that reads the same list
+  // the implementation reads would pass however a widget was filed.
+  it('exempts every game from the cycle clock', () => {
+    for (const id of [
+      'snake',
+      'flappy-bird',
+      'pong',
+      'simon',
+      'suika',
+      'space-invaders',
+    ]) {
+      expect(isSelfPaced(id)).toBe(true);
+    }
   });
 
   it('leaves the fidget toys on the clock', () => {
-    expect(isSelfPaced('bubble-wrap')).toBe(false);
-    expect(isSelfPaced('fidget-spinner')).toBe(false);
-    expect(isSelfPaced('newtons-cradle')).toBe(false);
+    for (const id of [
+      'bubble-wrap',
+      'fidget-spinner',
+      'newtons-cradle',
+      'falling-sand',
+      'rain-stick',
+      'thumb-piano',
+    ]) {
+      expect(isSelfPaced(id)).toBe(false);
+    }
   });
 
   it('treats an unknown id as clock-paced, so a typo cannot wedge the cycle', () => {

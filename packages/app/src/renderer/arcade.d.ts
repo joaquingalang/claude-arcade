@@ -8,6 +8,8 @@ export interface ShowPayload {
   /** The window box the main process just sized itself to, in CSS pixels. */
   width: number;
   height: number;
+  /** Whether widgets may make noise, read fresh from config.json on every show. */
+  soundEnabled: boolean;
 }
 
 export interface ArcadeBridge {
@@ -21,6 +23,8 @@ export interface ArcadeBridge {
   dismiss(): void;
   /** Tell main this widget's run is over and it is ready to hand over. */
   widgetDone(widgetId: string): void;
+  /** Bytes of one sound sample, or null if it is not installed. See main/samples.ts. */
+  readSample(name: string): Promise<Uint8Array | null>;
 }
 
 declare global {

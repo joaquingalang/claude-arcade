@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
-import { FidgetSpinner } from '../packages/app/src/renderer/widgets/fidget-spinner';
+import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
+import { COLORWAYS, FidgetSpinner } from '../packages/app/src/renderer/widgets/fidget-spinner';
 import { FlappyBird } from '../packages/app/src/renderer/widgets/flappy-bird';
 import { NewtonsCradle } from '../packages/app/src/renderer/widgets/newtons-cradle';
+import { RainStick } from '../packages/app/src/renderer/widgets/rain-stick';
 import { Pong } from '../packages/app/src/renderer/widgets/pong';
+import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
+import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
+import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
+import { Suika } from '../packages/app/src/renderer/widgets/suika';
 import { widgetBounds } from '../packages/app/src/main/widget-ids';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
 
@@ -71,17 +77,28 @@ function makeProbe(width: number, height: number) {
     closePath: noop,
     moveTo: add,
     lineTo: add,
+    // Both the control point and the end point: a curve can bulge past its own endpoints,
+    // and a probe that only saw where it landed would miss a widget bending out of frame.
+    quadraticCurveTo: (cx: number, cy: number, x: number, y: number) => {
+      add(cx, cy);
+      add(x, y);
+    },
     arc: (x: number, y: number, r: number) => box(x - r, y - r, r * 2, r * 2),
     ellipse: (x: number, y: number, rx: number, ry: number) => box(x - rx, y - ry, rx * 2, ry * 2),
     fill: noop,
     stroke: noop,
     // The per-frame clear covers the whole box by definition, so it says nothing.
     clearRect: noop,
+    // Neither does a clip: it is a region, not a mark, and counting its corners as drawn
+    // points would let a widget widen its own bounding box by clipping.
+    rect: noop,
+    clip: noop,
     fillRect: box,
     fillText: (_t: string, x: number, y: number) => add(x, y),
     measureText: () => ({ width: 10 }),
     createRadialGradient: () => gradient,
     createLinearGradient: () => gradient,
+    createConicGradient: () => gradient,
     fillStyle: '' as unknown,
     strokeStyle: '' as unknown,
     lineWidth: 0,
@@ -101,9 +118,15 @@ const WIDGETS: Array<[string, () => CanvasWidget]> = [
   ['bubble-wrap', () => new BubbleWrap()],
   ['fidget-spinner', () => new FidgetSpinner()],
   ['newtons-cradle', () => new NewtonsCradle()],
+  ['falling-sand', () => new FallingSand()],
+  ['rain-stick', () => new RainStick()],
+  ['thumb-piano', () => new ThumbPiano()],
   ['snake', () => new Snake()],
   ['flappy-bird', () => new FlappyBird()],
   ['pong', () => new Pong()],
+  ['simon', () => new Simon()],
+  ['suika', () => new Suika()],
+  ['space-invaders', () => new SpaceInvaders()],
 ];
 
 /**
@@ -157,6 +180,38 @@ describe.each(WIDGETS)('%s geometry', (id, make) => {
     expect(inside / points.length).toBeGreaterThan(0.7);
   });
 });
+
+/**
+ * Every colourway, not just whichever one the dice handed the sweep above.
+ *
+ * The rare finishes draw things the commons do not - a halo wider than the body, glints
+ * hanging off the lobe tips - and at ~2% a pull they would otherwise be checked about
+ * once every fifty runs, which is worse than not checking them at all.
+ */
+describe.each(COLORWAYS.map((c) => [c.id, c] as const))(
+  'fidget-spinner %s geometry',
+  (_id, skin) => {
+    it('keeps its finish inside the window box', () => {
+      const { points, width, height } = probe(
+        'fidget-spinner',
+        () => new FidgetSpinner(),
+        240,
+        (w) => {
+          (w as unknown as { skin: typeof skin }).skin = skin;
+        }
+      );
+
+      // Filtered rather than asserted per point: a probe run is six figures of points, and
+      // an `expect` each would take longer than the whole rest of the suite.
+      const bad = points.filter(
+        ([x, y]) =>
+          !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > width || y < 0 || y > height
+      );
+      expect(points.length).toBeGreaterThan(0);
+      expect(bad.slice(0, 4)).toEqual([]);
+    });
+  }
+);
 
 /**
  * The cradle gets a stricter rule than the sanity floor above.

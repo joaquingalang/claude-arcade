@@ -70,6 +70,17 @@ export interface SessionRegistration {
   token: string;
 }
 
+/**
+ * Body of the CLI's POST /play - put a named widget on screen right now.
+ *
+ * The one request that isn't about a Claude session at all: it says nothing about what
+ * Claude is doing, it just asks for a toy. See `handPicked` in the app's main process for
+ * what that outranks.
+ */
+export interface PlayRequest {
+  widgetId: string;
+}
+
 export interface PingResponse {
   app: typeof APP_ID;
   version: string;
