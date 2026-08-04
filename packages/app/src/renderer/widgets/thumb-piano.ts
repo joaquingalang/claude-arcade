@@ -20,7 +20,13 @@ import { CanvasWidget } from './types';
  * sounds intended rather than like a mistake. See TINE_HZ in `../audio`.
  */
 
-const COUNT = 7;
+/**
+ * Tines on the board.
+ *
+ * Odd on purpose: the V layout below has one tine in the middle, and an even count would
+ * leave the lowest note off-centre and the board visibly lopsided.
+ */
+const COUNT = 9;
 
 /**
  * Which note each tine plays, left to right.
@@ -28,7 +34,7 @@ const COUNT = 7;
  * Centre is the lowest and the longest, and the notes climb alternately outwards, which is
  * how a kalimba is actually laid out and why it is shaped like a V.
  */
-const NOTE_OF_TINE = [6, 4, 2, 0, 1, 3, 5];
+const NOTE_OF_TINE = [8, 6, 4, 2, 0, 1, 3, 5, 7];
 
 /** Geometry, as fractions of the box. */
 const BODY_X = 0.1;
@@ -37,13 +43,26 @@ const BODY_W = 0.8;
 const BODY_H = 0.76;
 /** Where the tines are clamped. Everything below this is free to vibrate. */
 const BRIDGE_Y = 0.36;
-const TINE_W = 0.032;
-const TINE_SPACING = 0.098;
-/** Length of the longest (centre) tine, and how much each step up shortens it. */
+/**
+ * Width and pitch of the bars.
+ *
+ * Both fell when the board went from seven tines to nine, and by different amounts: the
+ * spacing is fixed by the body it has to fit inside, but the width is a judgement. Keeping
+ * the old 0.032 bar at the new pitch left a gap thinner than the bars themselves, which
+ * reads as a grille rather than as nine separate things to hit.
+ */
+const TINE_W = 0.028;
+const TINE_SPACING = 0.073;
+/**
+ * Length of the longest (centre) tine, and how much each step up shortens it.
+ *
+ * The step is the span divided by the gaps between notes, so the V spans the same board it
+ * always did - eight steps now rather than six, hence the smaller number.
+ */
 const TINE_LEN = 0.44;
-const TINE_STEP = 0.052;
+const TINE_STEP = 0.039;
 
-/** How far past a tine's tip still counts as a pluck. A 9px bar is not a precision target. */
+/** How far past a tine's tip still counts as a pluck. An 8px bar is not a precision target. */
 const PLUCK_PAD = 0.03;
 
 /** Seconds for a plucked tine's visible shimmer to die away. */
@@ -267,7 +286,7 @@ export class ThumbPiano extends CanvasWidget {
    * Dragging a held pointer across the board plays it.
    *
    * The press is what separates playing from passing through: one gesture covers both a
-   * tap on a single tine and a glissando across all seven, and a pointer merely crossing
+   * tap on a single tine and a glissando across all nine, and a pointer merely crossing
    * the widget stays silent. See the class comment.
    */
   override onPointerMove(x: number, y: number): void {

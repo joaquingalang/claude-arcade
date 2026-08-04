@@ -510,7 +510,16 @@ describe('Snake', () => {
     pump(12);
     expect(st.dying).toBe(true);
 
-    pump(60); // past the death fade
+    // Frame by frame until the fade ends, and checked the moment it does. Waiting out a
+    // fixed count instead lets the fresh snake run at the food - which the reset drops
+    // somewhere random - and eat it before the assertion, which is a fresh snake of five.
+    // The board resets and returns in the same breath, so the frame `dying` clears is the
+    // one frame where the new snake is guaranteed not to have moved yet.
+    let waited = 0;
+    while (st.dying && waited < 120) {
+      pump(1);
+      waited++;
+    }
     expect(st.dying).toBe(false);
     expect(st.snake.length).toBe(4);
   });
@@ -1067,11 +1076,11 @@ describe('RainStick', () => {
 });
 
 /** Kept in step with the board geometry in thumb-piano.ts. */
-const TINE_COUNT_HINT = 7;
+const TINE_COUNT_HINT = 9;
 const BRIDGE_Y_HINT = 0.36 * SIZE;
-const TINE_SPACING_HINT = 0.098 * SIZE;
+const TINE_SPACING_HINT = 0.073 * SIZE;
 /** Which note each tine sounds, left to right - lowest in the middle, climbing outwards. */
-const NOTE_OF_TINE_HINT = [6, 4, 2, 0, 1, 3, 5];
+const NOTE_OF_TINE_HINT = [8, 6, 4, 2, 0, 1, 3, 5, 7];
 
 interface PianoInternals {
   tines: Array<{ ring: number; note: number; len: number }>;
@@ -1100,6 +1109,36 @@ describe('ThumbPiano', () => {
       st.tines.reduce((a, b) => (a.len >= b.len ? a : b)),
     );
     expect(st.tines[longest]!.note).toBe(0);
+  });
+
+  /**
+   * The constraint that bounds the tine count.
+   *
+   * Adding tines is a one-character change to COUNT and the spacing has to come down to
+   * pay for it; get that wrong and the outer bars hang off the edge of the board, or the
+   * shortest ones end up too stubby to aim at. Neither breaks anything the other tests
+   * can see - the widget still draws, still sounds, still passes the bounds probe, and
+   * just looks wrong.
+   */
+  it('fits every tine on the board, with room left to hit', () => {
+    const { st } = start();
+    const bodyLeft = 0.1 * SIZE;
+    const bodyRight = bodyLeft + 0.8 * SIZE;
+    const halfBar = (0.028 * SIZE) / 2;
+
+    for (let i = 0; i < TINE_COUNT_HINT; i++) {
+      const x = on(i).x;
+      expect(x - halfBar).toBeGreaterThan(bodyLeft);
+      expect(x + halfBar).toBeLessThan(bodyRight);
+    }
+    // Every bar wider than it is thin, and none of them longer than the body below the
+    // bridge - the two ways a shrinking tine stops reading as a tine.
+    for (const t of st.tines) {
+      expect(t.len).toBeGreaterThan(halfBar * 4);
+      expect(BRIDGE_Y_HINT + t.len).toBeLessThan((0.13 + 0.76) * SIZE);
+    }
+    // And the bars do not touch, or nine tines read as one grille.
+    expect(TINE_SPACING_HINT).toBeGreaterThan(halfBar * 2 * 1.5);
   });
 
   it('plucks the tine under the pointer', () => {
@@ -1417,6 +1456,14 @@ const SUIKA_TOP_TIER_HINT = 4;
 const SUIKA_RELOAD_HINT = 0.4;
 const SUIKA_DROPS_HINT = 26;
 
+/**
+ * Every field the jar's solver reads, none of them optional.
+ *
+ * `spin` used to be, which quietly made the hand-built piles below into fruit with no
+ * orientation at all. That was survivable only while spin was write-only: friction now
+ * reads it back out of each contact, so an undefined one turns the whole contact into NaN
+ * and a stack that should overflow instead drifts off into nowhere and never ends the run.
+ */
 interface SuikaFruit {
   x: number;
   y: number;
@@ -1424,6 +1471,11 @@ interface SuikaFruit {
   vy: number;
   tier: number;
   age: number;
+  born: number;
+  seed: number;
+  rot: number;
+  spin: number;
+  touching: boolean;
 }
 
 interface SuikaInternals {
@@ -1446,6 +1498,15 @@ describe('Suika', () => {
     w.start(ctx, { width: SIZE, height: SIZE, onDone });
     return { w, onDone, st: w as unknown as SuikaInternals };
   };
+
+  /**
+   * A fruit that has been in the jar long enough to count, for piles built by hand.
+   *
+   * Spread over with a position and a tier. `age` is past SETTLE_AGE so the overflow test
+   * takes it seriously, and everything else is the at-rest value a real drop would have
+   * arrived at.
+   */
+  const settled = { vx: 0, vy: 0, age: 5, born: 1, seed: 0, rot: 0, spin: 0, touching: false };
 
   /** Drop a fruit of a chosen tier at a chosen x, bypassing the random deal. */
   const dropAt = (w: CanvasWidget, st: SuikaInternals, tier: number, x: number) => {
@@ -1478,6 +1539,262 @@ describe('Suika', () => {
     expect(f.y).toBeCloseTo(JAR_FLOOR_HINT - st.radius(f.tier), 0);
   });
 
+  /**
+   * The jar is full of round objects and has to behave like it.
+   *
+   * Restitution used to be 0.08, which is close enough to zero that a fruit dropped from
+   * the top of the jar arrived and stopped, and nothing in the pile ever reacted to
+   * anything. This is the cheap half of the fix, and the settling test below is the half
+   * that keeps it honest.
+   */
+  it('bounces a dropped fruit back off the floor', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    dropAt(w, st, 0, SIZE * 0.5);
+    const f = st.fruit[0]!;
+    const r = st.radius(f.tier);
+    const rest = JAR_FLOOR_HINT - r;
+
+    // Frame by frame, because the whole rebound is over in about a third of a second - and
+    // watched by velocity rather than by position, since the fruit is only ever *at* the
+    // floor inside a substep and is already on its way back up by the time the frame ends.
+    let bounced = false;
+    let peak = rest;
+    for (let i = 0; i < 60; i++) {
+      pump(1);
+      if (!bounced) bounced = f.vy < 0;
+      else peak = Math.min(peak, f.y);
+    }
+    expect(bounced).toBe(true);
+    // A whole fruit's worth of daylight under it, which is the difference between a bounce
+    // and a numerical wobble.
+    expect(rest - peak).toBeGreaterThan(r);
+  });
+
+  /**
+   * ...and the reason the bounce was set to nearly nothing in the first place.
+   *
+   * A jar that keeps twitching never settles, and a pile that never settles never merges,
+   * so the whole game quietly stops working. What buys the bounce back is a cutoff: a
+   * contact slower than it just stops. Assert the pile actually goes still, or the next
+   * person to raise restitution has nothing to catch them.
+   */
+  it('still settles dead still, so the pile can merge', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    // Four different tiers, so nothing merges away mid-test and the stack stays four high.
+    for (let tier = 0; tier < 4; tier++) {
+      dropAt(w, st, tier, SIZE * 0.5);
+      pump(45);
+    }
+    pump(300); // 5s to come to rest
+
+    const before = st.fruit.map((f) => f.y);
+    pump(60);
+    for (const [i, f] of st.fruit.entries()) {
+      expect(Math.abs(f.y - before[i]!)).toBeLessThan(0.5);
+      // Under the cutoff, which is what "no longer bouncing" means. Not zero: a fruit
+      // resting on another still picks up a substep of gravity that the pair solve hands
+      // straight back, so the number a frame ends on is small and constant rather than
+      // absent. The position check above is what proves it goes nowhere.
+      expect(Math.abs(f.vy)).toBeLessThan(SIZE * 0.25);
+    }
+  });
+
+  /**
+   * Fruit are drawn with markings now, so a pile that never turns anything reads as flat.
+   *
+   * Sampled a few frames after the impact rather than once it has settled: a fruit that
+   * has come to rest on the floor is supposed to have stopped turning too, and asking
+   * later would only prove the spin decays.
+   */
+  it('sets a fruit spinning when it lands on another off-centre', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    dropAt(w, st, 3, SIZE * 0.5);
+    pump(120);
+    // Onto the shoulder of the first, rather than square on top of it.
+    dropAt(w, st, 2, SIZE * 0.5 + st.radius(3));
+
+    let fastest = 0;
+    for (let i = 0; i < 60; i++) {
+      pump(1);
+      for (const f of st.fruit) fastest = Math.max(fastest, Math.abs(f.spin ?? 0));
+    }
+    expect(fastest).toBeGreaterThan(0.5);
+  });
+
+  /**
+   * ...and stops it again once it has nowhere left to roll.
+   *
+   * The other half of the same contact, and the half that was missing. Friction used to
+   * measure the slide between the two *centres*, which cannot see the spin it handed out
+   * on the substep before - so a fruit with fruit under it collected a sliver of torque
+   * every substep that nothing ever took back, and sat perfectly still turning at MAX_SPIN
+   * for the whole run. How fast depended on the angle it was wedged at, which is why some
+   * landings looked fine and the one beside it span like a drill.
+   *
+   * A wedged fruit rather than a settled one on purpose: the floor drags spin towards a
+   * matching roll itself, so anything that reaches the bottom stops turning whether or not
+   * fruit-on-fruit friction works at all.
+   */
+  it('stops a fruit turning once it is wedged in a pile', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    // Three across the floor, touching, so the two gaps between them are notches a small
+    // fruit can rest in rather than fall through.
+    const big = st.radius(SUIKA_TOP_TIER_HINT);
+    const mid = st.radius(SUIKA_TOP_TIER_HINT - 1);
+    const x0 = JAR_LEFT_HINT + big;
+    const x1 = x0 + big + mid;
+    const x2 = x1 + mid + big;
+    st.fruit.push(
+      { ...settled, x: x0, y: JAR_FLOOR_HINT - big, tier: SUIKA_TOP_TIER_HINT },
+      { ...settled, x: x1, y: JAR_FLOOR_HINT - mid, tier: SUIKA_TOP_TIER_HINT - 1 },
+      { ...settled, x: x2, y: JAR_FLOOR_HINT - big, tier: SUIKA_TOP_TIER_HINT },
+    );
+    dropAt(w, st, 1, (x1 + x2) / 2);
+    pump(300); // 5s to drop in and come to rest
+
+    // The premise of the test, not decoration: with nothing wedged, every fruit is on the
+    // floor and the floor would have stopped them all by itself.
+    const perched = st.fruit.filter((f) => f.y + st.radius(f.tier) < JAR_FLOOR_HINT - 1);
+    expect(perched.length).toBeGreaterThan(0);
+
+    const before = st.fruit.map((f) => f.rot);
+    pump(60); // 1s
+    for (const [i, f] of st.fruit.entries()) {
+      // A fifth of a turn a second. Comfortably above the creep an impulse solver leaves
+      // behind - measured at 0.04 rad/s - and far under the 8.6 the bug turned at.
+      expect(Math.abs(f.rot - before[i]!)).toBeLessThan(0.5);
+    }
+  });
+
+  /**
+   * The jar itself must not turn a fruit that is only leaning on it.
+   *
+   * The other end of the same bug, and the one that actually showed. Wall and floor grip
+   * used to drag spin a fixed fraction of the way towards rolling every substep, no matter
+   * how lightly the fruit was pressed against that surface - and a fruit at rest is not at
+   * rest as far as one substep is concerned. It is handed a sliver of gravity that the
+   * floor takes straight back, and read as a slide, that sliver is a fruit skidding down a
+   * wall forever. A settled pile with nothing moving at all measured 1.6 rad/s and drifted
+   * over three radians in two seconds.
+   *
+   * Corner-first, because that is where the two surfaces disagreed hardest: the wall drove
+   * the spin off the vertical sliver while the floor dragged it back towards nothing.
+   */
+  it('leaves a pile resting against the wall and floor completely still', () => {
+    const { w, st } = start();
+    st.auto = false;
+    st.fruit.length = 0;
+
+    // Stacked into the bottom-right corner, so every fruit touches wall, floor or both.
+    const r = st.radius(2);
+    for (let i = 0; i < 4; i++) {
+      dropAt(w, st, 2, JAR_RIGHT_HINT - r - (i % 2) * r * 0.4);
+      pump(90);
+    }
+    pump(420); // 7s to come fully to rest
+
+    const before = st.fruit.map((f) => ({ x: f.x, y: f.y, rot: f.rot }));
+    pump(120); // 2s
+    for (const [i, f] of st.fruit.entries()) {
+      const was = before[i]!;
+      // Nothing moved, so nothing may have turned. A fruit that is genuinely rolling is
+      // travelling, and the position check is what tells the two apart.
+      expect(Math.hypot(f.x - was.x, f.y - was.y)).toBeLessThan(0.5);
+      expect(Math.abs(f.rot - was.rot)).toBeLessThan(0.1);
+      expect(Math.abs(f.spin)).toBeLessThan(0.1);
+    }
+  });
+
+  /**
+   * ...and the same thing again, in piles nobody chose.
+   *
+   * The two tests above are hand-built, and hand-built piles are the problem: both of them
+   * passed for a long time while random ones still turned. Endless rotation does not need
+   * an exotic arrangement, but it does need a particular one - a fruit resting across two
+   * neighbours at an angle where the sliver of gravity it is handed every substep lands
+   * across its contacts instead of square into them - and picking piles by hand is picking
+   * the ones already thought of. Forty random jars found it in fourteen; the worst of them
+   * turned a full radian every two seconds, forever, without moving a pixel.
+   *
+   * So this drops fruit down a seeded jar, lets it all settle, and holds every fruit that
+   * went nowhere to having turned nowhere as well. Seeded, so a failure can be reproduced,
+   * and several seeds, because any single arrangement is exactly the hand-built case again.
+   */
+  it('leaves no fruit turning on the spot, in piles it did not choose', () => {
+    // Small, fast, and fixed: xorshift, so a seed reproduces a jar exactly.
+    const seeded = (seed: number) => {
+      let a = seed >>> 0;
+      return () => {
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+
+    // Worst case across every jar, rather than whichever seed happens to fail first - the
+    // mildest one is a poor description of what went wrong.
+    let spun = { seed: 0, tier: 0, spin: 0 };
+    let turned = { seed: 0, tier: 0, drift: 0 };
+
+    for (let seed = 1; seed <= 12; seed++) {
+      const rng = seeded(seed);
+      const rand = vi.spyOn(Math, 'random').mockImplementation(rng);
+      try {
+        const { w, st } = start();
+        st.auto = false;
+        st.fruit.length = 0;
+
+        // Twelve fruit, anywhere across the jar, at uneven intervals - the point is that
+        // nothing here was chosen for its angles.
+        for (let i = 0; i < 12; i++) {
+          dropAt(w, st, Math.floor(rng() * 3), JAR_LEFT_HINT + rng() * (JAR_RIGHT_HINT - JAR_LEFT_HINT));
+          pump(20 + Math.floor(rng() * 40));
+        }
+        pump(900); // 15s to come fully to rest
+
+        const before = st.fruit.map((f) => ({ f, x: f.x, y: f.y, rot: f.rot }));
+        pump(120); // 2s
+        for (const was of before) {
+          // Skip anything that merged away mid-watch - it is a different fruit now.
+          if (!st.fruit.includes(was.f)) continue;
+          const f = was.f;
+          if (Math.hypot(f.x - was.x, f.y - was.y) > 1) continue; // genuinely rolling
+          const spin = Math.abs(f.spin);
+          const drift = Math.abs(f.rot - was.rot);
+          if (spin > spun.spin) spun = { seed, tier: f.tier, spin };
+          if (drift > turned.drift) turned = { seed, tier: f.tier, drift };
+        }
+        w.stop();
+      } finally {
+        rand.mockRestore();
+      }
+    }
+
+    // The sharp one. What made the bug endless was that a wedged fruit's spin was topped
+    // up as fast as anything took it away, so it sat at a fixed rate forever rather than
+    // decaying - a third of a radian a second was typical across these jars. Nothing drives
+    // a parked fruit now, so whatever it had is gone: this measures 0.00.
+    expect(spun.spin, `seed ${spun.seed}, tier ${spun.tier}`).toBeLessThan(0.05);
+    // And the looser one, on how far it actually turned. Generous, because a jar this size
+    // is still finishing late merges fifteen seconds in, and a fruit on its way to a stop
+    // is allowed to turn on the way there - what it may not do is keep turning, which is
+    // what the spin above pins down. This measures 0.13 against the bug's 0.60.
+    expect(turned.drift, `seed ${turned.seed}, tier ${turned.tier}`).toBeLessThan(0.2);
+  });
+
   it('fuses two fruit of the same tier into one of the next', () => {
     const { w, st } = start();
     st.auto = false;
@@ -1501,8 +1818,8 @@ describe('Suika', () => {
     const y = JAR_FLOOR_HINT - r;
     st.fruit.length = 0;
     st.fruit.push(
-      { x: SIZE / 2 - r * 0.6, y, vx: 0, vy: 0, tier: SUIKA_TOP_TIER_HINT, age: 5 },
-      { x: SIZE / 2 + r * 0.6, y, vx: 0, vy: 0, tier: SUIKA_TOP_TIER_HINT, age: 5 },
+      { ...settled, x: SIZE / 2 - r * 0.6, y, tier: SUIKA_TOP_TIER_HINT },
+      { ...settled, x: SIZE / 2 + r * 0.6, y, tier: SUIKA_TOP_TIER_HINT },
     );
 
     pump(4);
@@ -1558,13 +1875,11 @@ describe('Suika', () => {
     st.fruit.length = 0;
     for (let i = 0; i < 5; i++) {
       st.fruit.push({
+        ...settled,
         x: SIZE / 2,
         y: JAR_FLOOR_HINT - r - i * r * 2,
-        vx: 0,
-        vy: 0,
         // Alternating tiers, so the stack cannot merge itself back down out of trouble.
         tier: i % 2 === 0 ? SUIKA_TOP_TIER_HINT : SUIKA_TOP_TIER_HINT - 1,
-        age: 5,
       });
     }
 

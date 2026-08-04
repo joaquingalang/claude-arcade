@@ -15,10 +15,10 @@
  * split rather than an inconsistency. Bubble wrap samples because a real pop is full of
  * detail no oscillator will reproduce, and because a missing file there costs polish and
  * nothing else. The thumb piano is the opposite case: its pitches *are* the toy, so a
- * missing sample set would not make it duller, it would make it pointless - and seven
+ * missing sample set would not make it duller, it would make it pointless - and nine
  * tuned files is a lot to ask before anything can be heard. Synthesis makes it correct by
  * construction and audible the moment sound is switched on. Simon follows for the same
- * reason, four tuned files instead of seven. The rain stick follows because a bead
+ * reason, four tuned files instead of nine. The rain stick follows because a bead
  * striking a baffle is a filtered noise transient, which is nearly all a synthesiser has
  * to say.
  */
@@ -283,8 +283,15 @@ abstract class Synth {
  * what let the tines keep their traditional layout: a real kalimba runs lowest in the
  * middle and alternates outwards, so left-to-right is not a scale, and on any other tuning
  * that would sound like a mistake.
+ *
+ * Nine notes, and the two the ninth tine pair added went on the bottom rather than the top.
+ * Continuing up the scale would have put the outermost tines at 1319Hz and 1568Hz, where a
+ * pentatonic stops sounding warm and starts sounding like a smoke alarm - and the outermost
+ * tines are exactly the ones a careless sweep hits hardest. Extending downwards costs
+ * nothing: G4 and A4 are already in the scale, so every interval stays consonant, and the
+ * board gains a bass end a kalimba is supposed to have.
  */
-export const TINE_HZ = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66];
+export const TINE_HZ = [392, 440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66];
 
 /** Partials of a struck tine: the fundamental, its octave, and the attack ping. */
 const TINE_PARTIALS = [

@@ -281,10 +281,10 @@ silently rather than breaking.
 
 **The rain stick, thumb piano and Simon synthesise**, and that is a deliberate split rather
 than an inconsistency. The thumb piano's pitches *are* the toy, so a missing sample set
-would not make it duller, it would make it pointless - and seven tuned files is a lot to ask
+would not make it duller, it would make it pointless - and nine tuned files is a lot to ask
 before anything can be heard at all. Synthesis makes it correct by construction and audible
 the moment sound is switched on. Simon follows for the same reason with four tuned pitches
-instead of seven. The rain stick follows because a bead striking a baffle is a band-passed
+instead of nine. The rain stick follows because a bead striking a baffle is a band-passed
 noise transient with a 30ms decay, which is nearly everything there is to say about it.
 
 Simon's pads are the original toy's four pitches - A3, C♯4, E4 and A4, an A major chord -
