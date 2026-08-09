@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseCommand, resolveWidgetId } from '../packages/cli/src/commands';
+import { claudeLaunch } from '../packages/cli/src/resolve-claude';
 import { GAME_IDS, TOY_IDS, WIDGET_IDS } from '../packages/shared/src/widgets';
 import { WIDGET_REGISTRY } from '../packages/app/src/renderer/widgets/registry';
 
@@ -112,6 +113,52 @@ describe('resolveWidgetId', () => {
   // `pong` / `pong-2` rather than anything that exists today.
   it('prefers an exact match to a longer id that starts the same way', () => {
     expect(resolveWidgetId('pong', ['pong', 'pong-deluxe'])).toEqual({ found: 'pong' });
+  });
+});
+
+describe('claudeLaunch', () => {
+  const SETTINGS = '{"hooks":{"Stop":[{"hooks":[{"type":"http","url":"http://x/hook"}]}]}}';
+
+  it('spawns a real executable directly on every platform', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      const exe = platform === 'win32' ? 'C:\\bin\\claude.exe' : '/usr/bin/claude';
+      expect(claudeLaunch(exe, ['-p', 'hi'], platform)).toEqual({
+        command: exe,
+        args: ['-p', 'hi'],
+      });
+    }
+  });
+
+  // The bug this exists for: an npm-global install of Claude Code leaves `claude.cmd` on
+  // PATH, and since Node 18.20.2 spawning a .cmd with shell:false throws EINVAL - before
+  // any 'error' listener is attached, so it escapes as a stack trace rather than a
+  // message. Batch shims have to go through the interpreter.
+  it('routes a Windows batch shim through the command interpreter', () => {
+    for (const shim of ['C:\\npm\\claude.cmd', 'C:\\npm\\claude.bat', 'C:\\npm\\CLAUDE.CMD']) {
+      const launch = claudeLaunch(shim, ['--settings', SETTINGS, '-c'], 'win32');
+      expect(launch.command).toMatch(/cmd\.exe$/i);
+      expect(launch.args).toEqual(['/d', '/s', '/c', shim, '--settings', SETTINGS, '-c']);
+    }
+  });
+
+  // Arguments are handed over as separate argv entries, never concatenated into a string:
+  // the settings payload is JSON full of double quotes, and Node's own quoting is the
+  // thing keeping us out of the escaping business.
+  it('never mangles the arguments it passes on', () => {
+    const args = ['--settings', SETTINGS, '-p', 'fix A & B', '--model', 'opus'];
+    expect(claudeLaunch('C:\\npm\\claude.cmd', args, 'win32').args.slice(3)).toEqual([
+      'C:\\npm\\claude.cmd',
+      ...args,
+    ]);
+  });
+
+  // A .cmd on a machine that has no command interpreter is not a thing, but the extension
+  // check must not fire off Windows either - a POSIX file may legitimately end in .bat.
+  it('leaves a .cmd alone when the platform is not Windows', () => {
+    expect(claudeLaunch('/opt/claude.cmd', [], 'linux')).toEqual({
+      command: '/opt/claude.cmd',
+      args: [],
+    });
   });
 });
 

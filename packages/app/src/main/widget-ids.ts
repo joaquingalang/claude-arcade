@@ -66,6 +66,46 @@ export function widgetBounds(id: string): WidgetBounds {
   );
 }
 
+/** The part of a display a window may occupy - Electron's `Display.workArea`. */
+export interface WorkArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where the window goes, given where the user parked the base square.
+ *
+ * A box wider than the square grows around that square's centre rather than off its left
+ * edge, so a toy that needs the extra room stays visually where it was dropped. The result
+ * is clamped into the work area, because the default bottom-right anchor would otherwise
+ * push a wide box straight off the side of the screen.
+ *
+ * The work area is an argument rather than something this looks up, and that is the whole
+ * reason it is a function of its own: the display it describes has to be the one nearest
+ * the anchor, not the primary one. Clamping to the primary display would drag a toy parked
+ * on a second monitor back onto the first at the next rotation.
+ */
+export function placeWidget(
+  anchor: { x: number; y: number },
+  bounds: WidgetBounds,
+  workArea: WorkArea,
+): { x: number; y: number } {
+  const spread = (bounds.width - WIDGET_BASE_SIZE) / 2;
+  return {
+    x: Math.round(
+      Math.min(
+        Math.max(anchor.x - spread, workArea.x),
+        workArea.x + workArea.width - bounds.width,
+      ),
+    ),
+    y: Math.round(
+      Math.min(Math.max(anchor.y, workArea.y), workArea.y + workArea.height - bounds.height),
+    ),
+  };
+}
+
 type Kind = 'toy' | 'game';
 
 /**

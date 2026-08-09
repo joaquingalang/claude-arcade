@@ -12,7 +12,7 @@ import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
 import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
 import { Suika } from '../packages/app/src/renderer/widgets/suika';
-import { widgetBounds } from '../packages/app/src/main/widget-ids';
+import { placeWidget, widgetBounds } from '../packages/app/src/main/widget-ids';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
 
 const SIZE = 280;
@@ -274,5 +274,52 @@ describe("Newton's cradle containment", () => {
       expect(y).toBeGreaterThanOrEqual(0);
       expect(y).toBeLessThanOrEqual(height);
     }
+  });
+});
+
+/**
+ * Where the window itself lands, as opposed to where a widget draws inside it.
+ *
+ * The two are separate failures: every test above can pass while the box is sitting off
+ * the side of the screen, or on the wrong monitor.
+ */
+describe('window placement', () => {
+  const PRIMARY = { x: 0, y: 0, width: 1920, height: 1040 };
+  const square = widgetBounds('bubble-wrap');
+  const wide = widgetBounds('newtons-cradle');
+
+  it('puts a square toy exactly where it was parked', () => {
+    expect(placeWidget({ x: 600, y: 400 }, square, PRIMARY)).toEqual({ x: 600, y: 400 });
+  });
+
+  // The saved anchor is the base square's corner, so a wider box has to grow around that
+  // square's centre. Growing off its left edge would shift the toy sideways every time the
+  // rotation happened to land on the cradle.
+  it('grows a wide box around the square it replaces', () => {
+    const spread = (wide.width - square.width) / 2;
+    expect(placeWidget({ x: 600, y: 400 }, wide, PRIMARY)).toEqual({ x: 600 - spread, y: 400 });
+  });
+
+  // The default anchor sits a square's width from the right edge, so the cradle's extra
+  // 120px has nowhere to go and the box must be pulled back in rather than hang off.
+  it('pulls a wide box back inside the work area at the default corner', () => {
+    const anchor = { x: PRIMARY.width - square.width - 24, y: PRIMARY.height - square.height - 80 };
+    const { x } = placeWidget(anchor, wide, PRIMARY);
+    expect(x).toBe(PRIMARY.width - wide.width);
+    expect(x + wide.width).toBeLessThanOrEqual(PRIMARY.width);
+  });
+
+  // The regression this function was extracted for. A display left of the primary one has
+  // a negative origin; clamping against the primary work area would snap x up to 0 and
+  // haul the toy back onto the first monitor at the next swap.
+  it('leaves a toy parked on a second monitor where it is', () => {
+    const left = { x: -1920, y: -120, width: 1920, height: 1080 };
+    expect(placeWidget({ x: -1800, y: 0 }, square, left)).toEqual({ x: -1800, y: 0 });
+    expect(placeWidget({ x: -1800, y: 0 }, wide, left)).toEqual({ x: -1860, y: 0 });
+  });
+
+  it('clamps to the work area origin, not to zero', () => {
+    const shifted = { x: 100, y: 60, width: 800, height: 600 };
+    expect(placeWidget({ x: -50, y: -50 }, square, shifted)).toEqual({ x: 100, y: 60 });
   });
 });

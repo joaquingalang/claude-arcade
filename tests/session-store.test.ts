@@ -194,6 +194,35 @@ describe('watchdog', () => {
     store.reap();
     expect(store.size()).toBe(0);
   });
+
+  // The registration outlives the session on purpose, so /session-ended is the only thing
+  // that removes it - and that is exactly the POST a killed terminal never sends. The app
+  // runs for days, so this is the leak that case would otherwise leave behind.
+  it('retires a launcher registration once its terminal is gone', () => {
+    const { store } = makeStore({ alive: false });
+    store.registerLauncher(4242, 'C:/work', 'tok');
+    expect(store.pendingLauncherCount()).toBe(1);
+    store.reap();
+    expect(store.pendingLauncherCount()).toBe(0);
+  });
+
+  it('keeps the registration of a terminal that is still alive', () => {
+    const { store } = makeStore({ alive: true });
+    store.registerLauncher(4242, 'C:/work', 'tok');
+    store.apply(ev('UserPromptSubmit'), 'tok');
+    store.reap();
+    expect(store.pendingLauncherCount()).toBe(1);
+  });
+
+  // Why it is kept rather than consumed on first use: a /clear starts a fresh session id
+  // in the same terminal, and that session needs the pid too or it can never be reaped.
+  it('still matches a second session from the same terminal', () => {
+    const { store } = makeStore({ alive: true });
+    store.registerLauncher(4242, 'C:/work', 'tok');
+    store.apply(ev('UserPromptSubmit'), 'tok');
+    store.apply(ev('UserPromptSubmit', { session_id: 's2' }), 'tok');
+    expect(store.all().map((s) => s.launcherPid)).toEqual([4242, 4242]);
+  });
 });
 
 describe('launcher lifecycle', () => {

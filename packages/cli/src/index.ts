@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -10,7 +10,7 @@ import { parseCommand, resolveWidgetId } from './commands';
 import { buildHookSettings, serializeHookSettings } from './hook-settings';
 import { ensureApp, fetchStatus, pingApp, resolveAppLaunch } from './ensure-app';
 import { postJson } from './notify';
-import { resolveClaude } from './resolve-claude';
+import { claudeLaunch, resolveClaude } from './resolve-claude';
 
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
@@ -256,30 +256,46 @@ async function runClaude(userArgs: string[], withWidget: boolean): Promise<numbe
     }
   }
 
-  const child = spawn(claudePath, args, {
-    stdio: 'inherit',
-    windowsHide: false,
-    shell: false,
-  });
-
-  // Ctrl+C belongs to the child. Without this the wrapper dies first and Claude is
-  // orphaned mid-turn with its terminal state half-restored.
-  const ignoreSignal = () => {};
-  process.on('SIGINT', ignoreSignal);
-  process.on('SIGTERM', ignoreSignal);
-
-  const exitCode = await new Promise<number>((resolve) => {
-    child.on('error', (err) => {
-      process.stderr.write(`arcade: failed to launch claude: ${err.message}\n`);
-      resolve(127);
+  const launch = claudeLaunch(claudePath, args);
+  let child: ChildProcess | null = null;
+  try {
+    child = spawn(launch.command, launch.args, {
+      stdio: 'inherit',
+      windowsHide: false,
+      shell: false,
     });
-    child.on('exit', (code, signal) => {
-      // A signalled child has no exit code; report it the way a shell would.
-      if (code === null) resolve(signal ? 128 : 1);
-      else resolve(code);
-    });
-  });
+  } catch (err) {
+    // spawn throws synchronously for a path the platform refuses outright, so the 'error'
+    // listener below never sees it. Say so in one line rather than letting a stack trace
+    // out of main() - a wrapper that cannot start Claude must still fail like a wrapper.
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`arcade: failed to launch claude (${claudePath}): ${detail}\n`);
+  }
 
+  let exitCode = 127;
+  if (child) {
+    // Ctrl+C belongs to the child. Without this the wrapper dies first and Claude is
+    // orphaned mid-turn with its terminal state half-restored.
+    const ignoreSignal = () => {};
+    process.on('SIGINT', ignoreSignal);
+    process.on('SIGTERM', ignoreSignal);
+
+    const running = child;
+    exitCode = await new Promise<number>((resolve) => {
+      running.on('error', (err) => {
+        process.stderr.write(`arcade: failed to launch claude: ${err.message}\n`);
+        resolve(127);
+      });
+      running.on('exit', (code, signal) => {
+        // A signalled child has no exit code; report it the way a shell would.
+        if (code === null) resolve(signal ? 128 : 1);
+        else resolve(code);
+      });
+    });
+  }
+
+  // Posted even when the spawn failed: the app is already holding a launcher registration
+  // for a session that will now never produce a single hook event.
   if (port !== null) {
     await postJson(port, '/session-ended', { launcherPid: process.pid, token });
   }

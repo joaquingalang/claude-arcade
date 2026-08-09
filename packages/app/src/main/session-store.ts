@@ -120,8 +120,9 @@ export class SessionStore {
   }
 
   private createSession(sessionId: string, payload: HookPayload, token?: string): SessionInfo {
-    // Claim the queued launcher registration matching this token, so the watchdog can
-    // later check whether the terminal that started this session still exists.
+    // Read, not consumed: one launcher can produce several session ids - a /clear starts a
+    // new one in the same terminal - and each of them needs the pid for the watchdog to
+    // check later. reap() retires the registration when the pid itself goes away.
     const idx = token ? this.pendingLaunchers.findIndex((l) => l.token === token) : -1;
     const launcher = idx >= 0 ? this.pendingLaunchers[idx] : undefined;
 
@@ -153,6 +154,13 @@ export class SessionStore {
    */
   reap(): void {
     const t = this.now();
+
+    // A registration is otherwise removed only by /session-ended - which is precisely the
+    // POST that never arrives when a terminal is killed, the case this watchdog exists
+    // for. The app outlives every session it serves, so without this the list would grow
+    // by one for every terminal anyone ever closed the hard way.
+    this.pendingLaunchers = this.pendingLaunchers.filter((l) => this.isAlive(l.pid));
+
     for (const [id, session] of this.sessions) {
       if (session.state === 'done') {
         this.sessions.delete(id);
@@ -194,6 +202,11 @@ export class SessionStore {
 
   size(): number {
     return this.sessions.size;
+  }
+
+  /** Launcher registrations still waiting to be matched to a session. Reaped by pid. */
+  pendingLauncherCount(): number {
+    return this.pendingLaunchers.length;
   }
 
   all(): SessionInfo[] {

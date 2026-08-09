@@ -1,6 +1,6 @@
 import { BrowserWindow, screen } from 'electron';
 
-import { WIDGET_BASE_SIZE, widgetBounds, type WidgetBounds } from './widget-ids';
+import { WIDGET_BASE_SIZE, placeWidget, widgetBounds, type WidgetBounds } from './widget-ids';
 
 const SCREEN_MARGIN = 24;
 /** Roughly the Windows taskbar, so the default position doesn't sit under it. */
@@ -108,29 +108,17 @@ export class WidgetWindow {
   /**
    * Resize the window to the incoming widget's box and tell the renderer about it.
    *
-   * A wider box grows around the base square's centre rather than off its left edge, so
-   * a toy that needs the extra room stays visually where the user parked it. The result
-   * is clamped into the work area: without that, the default bottom-right position would
-   * push the wide box straight off the side of the screen.
+   * The placement itself is `placeWidget`; all this adds is which display to place on.
+   * That is the one nearest wherever the user parked the toy rather than the primary one,
+   * so a widget dragged to a second monitor is not clamped back onto the first the next
+   * time the rotation swaps.
    */
   private applyWidget(widgetId: string, generation: number): void {
     if (!this.win) return;
     this.bounds = widgetBounds(widgetId);
 
-    const { workArea } = screen.getPrimaryDisplay();
-    const spread = (this.bounds.width - WIDGET_BASE_SIZE) / 2;
-    const x = Math.round(
-      Math.min(
-        Math.max(this.anchor.x - spread, workArea.x),
-        workArea.x + workArea.width - this.bounds.width,
-      ),
-    );
-    const y = Math.round(
-      Math.min(
-        Math.max(this.anchor.y, workArea.y),
-        workArea.y + workArea.height - this.bounds.height,
-      ),
-    );
+    const { workArea } = screen.getDisplayNearestPoint(this.anchor);
+    const { x, y } = placeWidget(this.anchor, this.bounds, workArea);
 
     this.win.setBounds({ x, y, width: this.bounds.width, height: this.bounds.height });
     this.win.webContents.send('arcade:show', {

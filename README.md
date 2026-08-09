@@ -126,6 +126,17 @@ Add it through *Settings > System > About > Advanced system settings > Environme
 Variables*, under your user's `Path`, then open a new terminal - PATH is read at process
 start, so an already-open one will keep not finding it.
 
+**If `claude` itself came from npm**, what is on your PATH is `claude.cmd`, and Node has
+refused to spawn a `.cmd` or `.bat` without a shell since 18.20.2 - it throws `EINVAL`, and
+it throws *synchronously*, before there is an `error` listener to turn that into a sentence.
+So a batch shim is run through `cmd /d /s /c` and a real `claude.exe` is spawned directly.
+
+Naming cmd rather than passing `shell: true` is the load-bearing part. `shell: true` flattens
+the arguments into one string, and cmd does not know a `\"` from a `"` - it eats every quote
+in the injected `--settings` JSON and splits a prompt like `fix A & B` at the ampersand.
+Handing cmd its arguments as separate argv entries keeps Node's own quoting, and the whole
+2KB payload reaches Claude byte for byte.
+
 **On nvm4windows** (and nvm-desktop), the global directory lives inside the active Node
 version rather than in `%APPDATA%`, so switching versions makes `arcade` vanish. It isn't
 broken - re-run `npm run link` under the version you want to use it from.
@@ -209,6 +220,29 @@ focus. Snake, Pong, Suika and Space Invaders play themselves until you touch the
 that sits still until instructed is a chore. Suika's autopilot aims at whatever the queued
 fruit could merge with and ignores everything else, which is deliberately mediocre play: a
 demo that never loses would be a demo you have to watch.
+
+**Suika's jar is drawn as fruit rather than as five coloured discs**, and the outline is
+what keeps that honest. A cherry gets a stalk and a seam, a strawberry a calyx and seeds,
+the grapes are seven berries packed six-around-one, the orange has a leaf and a dimpled
+peel, the melon has stripes - but collisions are still centre-to-centre against the tier
+radius, so anything drawn past that edge is a stem or a leaf and never bulk, and the jar
+keeps matching what it looks like. The pile turns too, because a strawberry that rides down
+a slope without ever rotating reads as a sticker: contacts carry a tangential impulse - the
+grip that lets a fruit roll off a shoulder instead of skating off it - and spin rides along
+on that rather than needing an angular solve of its own.
+
+Getting the fruit to *stop* turning is the harder half. A fruit at rest is handed a sliver
+of gravity every substep; its contacts take it straight back, but they are solved a pair at
+a time, so the sliver lands slightly across each contact rather than square into it.
+Friction has to answer that as slide, and the answer it wants - two discs counter-rotating
+at matching rim speeds - has no slip at all, so nothing ever spends the spin. Damping only
+balances it at some lower speed, and no velocity in the solver can tell a stopped fruit
+from a rolling one: a fruit rolling properly has no slip, and one squeezed into a pile
+carries a large velocity that is solver residue rather than travel. Distance can. Residue
+is cancelled and re-created every substep and never adds up to displacement; travel does,
+by definition. A fruit that covered less than `REST_TRAVEL` over a whole frame while
+touching something has stopped, and a contact between two such fruit grips without driving
+spin.
 
 Simon is the exception, and it has to be: a memory game cannot demo itself. A sequence
 flashing at someone who is not watching is a round they have already lost by the time they
@@ -305,6 +339,18 @@ semitones and no tritone, which is exactly the property that makes each of those
 consonant. It is also what let the tines keep their traditional layout - a real kalimba runs
 lowest in the middle and climbs alternately outwards, so left to right is *not* a scale, and
 under any other tuning a sweep would sound like a mistake rather than a run.
+
+Nine tines span G4 to D6, and the board grew to nine from seven by adding a pair at the
+*bottom*. Carrying on up the scale would have put the outermost tines at 1319Hz and 1568Hz,
+where a pentatonic stops sounding warm and starts sounding like a smoke alarm - and the
+outermost tines are the ones a careless sweep hits hardest. Downwards costs nothing, since G
+and A are already in the scale, so every interval stays consonant and the board gains the
+bass end a kalimba is supposed to have.
+
+It also sounds under a **held pointer only** - press to strike one tine, drag across to play
+a phrase. Bubble wrap pops on a bare hover and this deliberately does not: a pop is a
+one-shot, but a pointer crossing the board on its way somewhere else would fire off a run of
+notes nobody asked for, and there is no way to take those back.
 
 All of it shares one `AudioContext`. Three would be three devices held open for a window
 that only ever shows one toy, and `suspendSound()` would need a list of them that the next
@@ -416,6 +462,12 @@ position - a non-focusable window stops receiving pointer events the moment the 
 outruns it. What gets saved is the base square's corner rather than the raw window
 position, so parking the cradle and then getting Pong doesn't shift the toy sideways.
 
+The box is then clamped into a work area, and *which* work area is the display nearest that
+saved corner rather than the primary one. Clamping against the primary display is the
+obvious thing to write and it is wrong the moment you own two monitors: a toy parked on the
+second one would be dragged back onto the first the next time the rotation swapped, since
+its coordinates are outside the primary work area and get clamped to its edge.
+
 All of it lives in `config.json` under Electron's `userData` directory:
 
 | key | default | meaning |
@@ -425,7 +477,7 @@ All of it lives in `config.json` under Electron's `userData` directory:
 | `cycleMs` | `15000` | time on screen per fidget toy; `0` disables cycling. Games ignore it |
 | `snakeKeyboard` | `true` | let Snake take the arrow keys system-wide while it is on screen |
 | `position` | `null` | where you dragged it; `null` means bottom-right of the work area |
-| `soundEnabled` | `false` | let widgets make a noise - bubble wrap, rain stick, thumb piano. Read on every show |
+| `soundEnabled` | `false` | let widgets make a noise - bubble wrap, rain stick, thumb piano, Simon. Read on every show |
 
 ## When the widget shows
 
@@ -457,6 +509,13 @@ Killing a terminal outright sends no `Stop`, so a watchdog sweeps every 15s: a s
 silent for two minutes whose launching process is gone gets dropped. Without it the toy
 would sit on screen forever waiting for a turn that already died.
 
+The same sweep retires the launcher registration behind it. A registration is deliberately
+*not* consumed when a session claims it - one terminal can produce several session ids,
+because `/clear` starts a fresh one - so what normally removes it is `arcade` exiting and
+posting `/session-ended`, which is exactly what a killed terminal never gets to do. A dead
+pid is the only other thing that will, and the app runs for days across many sessions, so
+without that check the list would grow by one for every terminal anyone closed the hard way.
+
 ## Layout
 
 ```
@@ -470,7 +529,7 @@ tests/      vitest, run against source
 ## Development
 
 ```bash
-npm test                  # 277 tests across 9 files
+npm test                  # 333 tests across 9 files
 npm run typecheck
 npm run build
 npm run link                 # rebuild and refresh the global `arcade` command
@@ -497,4 +556,4 @@ both fail depending on start order.
 
 ## Not yet
 
-Sounds, themes, statistics, SQLite, PixiJS, plugin API.
+Themes, statistics, SQLite, PixiJS, plugin API.
