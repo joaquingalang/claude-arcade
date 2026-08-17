@@ -5,9 +5,9 @@ import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import { COLORWAYS, FidgetSpinner } from '../packages/app/src/renderer/widgets/fidget-spinner';
 import { FlappyBird } from '../packages/app/src/renderer/widgets/flappy-bird';
 import { NewtonsCradle } from '../packages/app/src/renderer/widgets/newtons-cradle';
-import { RainStick } from '../packages/app/src/renderer/widgets/rain-stick';
 import { Pong } from '../packages/app/src/renderer/widgets/pong';
 import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
+import { TowerOfHanoi } from '../packages/app/src/renderer/widgets/tower-of-hanoi';
 import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
 import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
@@ -119,7 +119,7 @@ const WIDGETS: Array<[string, () => CanvasWidget]> = [
   ['fidget-spinner', () => new FidgetSpinner()],
   ['newtons-cradle', () => new NewtonsCradle()],
   ['falling-sand', () => new FallingSand()],
-  ['rain-stick', () => new RainStick()],
+  ['tower-of-hanoi', () => new TowerOfHanoi()],
   ['thumb-piano', () => new ThumbPiano()],
   ['snake', () => new Snake()],
   ['flappy-bird', () => new FlappyBird()],

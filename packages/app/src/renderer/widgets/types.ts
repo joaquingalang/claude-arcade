@@ -14,6 +14,16 @@ export interface WidgetOptions {
    * a timer is worse than no game.
    */
   onDone?: () => void;
+  /**
+   * Called when the widget starts or stops asking the cycle clock to wait for a player.
+   *
+   * For a toy a person can be *midway through* - a half-solved puzzle is worth finishing,
+   * and being swapped out three moves from the end is the same insult as losing a game at
+   * 4-3. It is not a way for a toy to appoint itself a game: a widget nobody is touching
+   * must never hold, because the clock is the only thing that moves an endless toy along.
+   * Main caps how long a hold is honoured regardless.
+   */
+  onHold?: (holding: boolean) => void;
 }
 
 /**
@@ -50,8 +60,11 @@ export abstract class CanvasWidget implements Widget {
   private raf: number | null = null;
   private lastTime = 0;
   private done: (() => void) | undefined;
+  private holdCycle: ((holding: boolean) => void) | undefined;
   /** Latched, so a game that ends on the same frame it draws can't report twice. */
   private finished = false;
+  /** Latched the other way: only changes of mind are worth an IPC message. */
+  private holding = false;
 
   start(ctx: CanvasRenderingContext2D, opts: WidgetOptions): void {
     this.ctx = ctx;
@@ -59,17 +72,35 @@ export abstract class CanvasWidget implements Widget {
     this.height = opts.height;
     this.size = Math.min(opts.width, opts.height);
     this.done = opts.onDone;
+    this.holdCycle = opts.onHold;
     this.finished = false;
+    this.holding = false;
     this.init();
     this.resume();
   }
 
   stop(): void {
     this.pause();
+    // Let the clock go before the callbacks are dropped. A widget torn down mid-hold must
+    // not leave the cycle waiting on a board that no longer exists.
+    this.setHold(false);
     // Drop the callback before teardown: whoever is tearing this widget down has already
     // moved on, and a late report would rotate the toy that just replaced it.
     this.done = undefined;
+    this.holdCycle = undefined;
     this.teardown();
+  }
+
+  /**
+   * Ask the cycle clock to wait, or release it.
+   *
+   * Only for the stretch a player is actually midway through something; see `onHold` for
+   * why a toy must not hold while nobody is touching it.
+   */
+  protected setHold(holding: boolean): void {
+    if (this.holding === holding) return;
+    this.holding = holding;
+    this.holdCycle?.(holding);
   }
 
   /**

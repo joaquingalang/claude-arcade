@@ -39,6 +39,12 @@ for (const [id, entry] of Object.entries(WIDGET_REGISTRY)) {
     onDone: () => {
       caption.textContent = `${entry.label} - done`;
     },
+    // No cycle clock here to hold, so the caption stands in for one: a widget that asks
+    // for a wait and forgets to let go is the failure worth seeing, and it is invisible
+    // without something on screen saying so.
+    onHold: (holding) => {
+      caption.textContent = holding ? `${entry.label} - holding` : entry.label;
+    },
   });
 
   const at = (e: PointerEvent) => {

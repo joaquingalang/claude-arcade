@@ -1,6 +1,6 @@
 # Sound samples
 
-This directory is for **bubble wrap only**. The rain stick and thumb piano make their own
+This directory is for **bubble wrap only**. The Tower of Hanoi and thumb piano make their own
 sound with oscillators and filtered noise and need no files at all - see the Sound section
 of the top-level README for why those two synthesise and this one does not.
 

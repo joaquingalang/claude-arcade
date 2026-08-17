@@ -180,7 +180,7 @@ All of them are mouse-only, because the window never takes keyboard focus.
 | `fidget-spinner` | drag to flick; friction spins it down | never - on the clock |
 | `newtons-cradle` | drag a ball out and release | never - on the clock |
 | `falling-sand` | drag to pour; it piles and avalanches | never - on the clock |
-| `rain-stick` | drag to tip it; the beads pour and clatter | never - on the clock |
+| `tower-of-hanoi` | it solves itself; drag a disc to take over | on the clock, unless you are mid-solve |
 | `thumb-piano` | press a tine, or drag across them to play a run | never - on the clock |
 | `snake` | arrow keys, or point where you want it to go | 3 lives spent |
 | `flappy-bird` | click to flap | 3 lives spent |
@@ -199,6 +199,13 @@ about as often as everything else without the order being guessable. Fidget toys
 along after `cycleMs`; games keep the screen until they reach their end, because being
 pulled off court at 4-3 is worse than never having played. A finished game hands over to
 the next widget, or restarts in place if rotation is off.
+
+**A toy you are in the middle of can ask the clock to wait.** Pick up a disc on the Tower
+of Hanoi and the swap holds off until the tower is standing complete again - being moved
+along three moves from the end of a puzzle is the same insult as losing a game at 4-3. The
+wait ends on its own if you leave the board alone for 15 seconds, and never runs past 90
+seconds whatever happens. Left untouched, the toy is on `cycleMs` like every other one:
+this is for a person mid-something, not a way for a toy to promote itself to a game.
 
 Hovering reveals a dismiss button in the top-right corner. Dismissing hides the toy for
 the rest of the current stretch of work; the next turn brings it back. It is a "not now",
@@ -236,7 +243,7 @@ lands on the next show rather than the next launch.
 Four widgets make a noise. **Bubble wrap plays samples** - four files named `pop-1.mp3`
 through `pop-4.mp3` in `packages/app/src/renderer/public/sounds/` (see the README there for
 what makes a good one). Missing files are not an error; an install with no samples pops
-silently. **The rain stick, thumb piano and Simon synthesise**, so they are audible the
+silently. **The Tower of Hanoi, thumb piano and Simon synthesise**, so they are audible the
 moment sound is switched on with nothing to download.
 
 Sound never carries information the picture doesn't - Simon's four pitches duplicate its

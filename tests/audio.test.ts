@@ -627,67 +627,67 @@ describe('simon pads', () => {
   });
 });
 
-describe('rain stick beads', () => {
+describe('hanoi knock', () => {
   it('is silent while sound is off', async () => {
-    const { beads } = await loadAudio();
-    beads.tick();
+    const { knock } = await loadAudio();
+    knock.tick();
     expect(FakeAudioContext.built).toBe(0);
   });
 
-  it('band-passes a slice of noise, jittered so a cascade is not one click repeated', async () => {
-    const { beads, setSoundEnabled } = await loadAudio();
+  it('band-passes a slice of noise, jittered so a run is not one click repeated', async () => {
+    const { knock, setSoundEnabled } = await loadAudio();
     setSoundEnabled(true);
 
     const ctx = () => FakeAudioContext.last!;
     for (let i = 0; i < 6; i++) {
-      beads.tick();
+      knock.tick();
       const last = ctx().sources[ctx().sources.length - 1]!;
       last.end();
     }
 
     expect(ctx().filters).toHaveLength(6);
     for (const f of ctx().filters) expect(f.type).toBe('bandpass');
-    // Every strike differs, or forty beads sound like one bead forty times.
+    // Every landing differs, or thirty moves sound like one move thirty times.
     expect(new Set(ctx().filters.map((f) => f.frequency.value)).size).toBeGreaterThan(1);
     expect(new Set(ctx().sources.map((s) => s.playbackRate.value)).size).toBeGreaterThan(1);
   });
 
-  it('generates the noise once and reuses it for every bead', async () => {
-    const { beads, setSoundEnabled } = await loadAudio();
+  it('generates the noise once and reuses it for every knock', async () => {
+    const { knock, setSoundEnabled } = await loadAudio();
     setSoundEnabled(true);
 
     for (let i = 0; i < 5; i++) {
-      beads.tick();
+      knock.tick();
       const ctx = FakeAudioContext.last!;
       ctx.sources[ctx.sources.length - 1]!.end();
     }
     expect(FakeAudioContext.last!.buffersMade).toBe(1);
   });
 
-  it('caps concurrent beads, then frees them as they decay', async () => {
-    const { beads, setSoundEnabled } = await loadAudio();
+  it('caps concurrent knocks, then frees them as they decay', async () => {
+    const { knock, setSoundEnabled } = await loadAudio();
     setSoundEnabled(true);
 
-    for (let i = 0; i < 60; i++) beads.tick();
+    for (let i = 0; i < 60; i++) knock.tick();
     const ctx = FakeAudioContext.last!;
     const capped = ctx.sources.length;
-    expect(capped).toBeLessThanOrEqual(14);
+    expect(capped).toBeLessThanOrEqual(6);
 
     for (const s of [...ctx.sources]) s.end();
-    beads.tick();
+    knock.tick();
     expect(ctx.sources.length).toBe(capped + 1);
   });
 });
 
 describe('one context for everything', () => {
   it('shares a single context across samples and synthesis', async () => {
-    const { pops, tines, beads, setSoundEnabled } = await loadAudio();
+    const { pops, tines, knock, setSoundEnabled } = await loadAudio();
     setSoundEnabled(true);
     await pops.prime();
 
     pops.play();
     tines.pluck(1);
-    beads.tick();
+    knock.tick();
 
     // Three sources of noise, one device held open.
     expect(FakeAudioContext.built).toBe(1);

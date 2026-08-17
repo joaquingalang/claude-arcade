@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CycleHold,
   GAME_IDS,
+  HOLD_CAP_MS,
   TOY_IDS,
   WIDGET_IDS,
   WidgetRotation,
@@ -123,7 +125,7 @@ describe('isSelfPaced', () => {
       'fidget-spinner',
       'newtons-cradle',
       'falling-sand',
-      'rain-stick',
+      'tower-of-hanoi',
       'thumb-piano',
     ]) {
       expect(isSelfPaced(id)).toBe(false);
@@ -138,6 +140,62 @@ describe('isSelfPaced', () => {
     for (const id of WIDGET_IDS.filter(isSelfPaced)) {
       expect(WIDGET_REGISTRY[id]).toBeDefined();
     }
+  });
+});
+
+describe('CycleHold', () => {
+  const T0 = 1_000_000;
+
+  it('lets the swap through when nobody has asked for anything', () => {
+    expect(new CycleHold().blocks('tower-of-hanoi', T0)).toBe(false);
+  });
+
+  it('makes the cycle wait for the widget that asked, and only that one', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    expect(hold.blocks('tower-of-hanoi', T0 + 5_000)).toBe(true);
+    // The swap that comes due for a different board is nothing to do with this hold.
+    expect(hold.blocks('bubble-wrap', T0 + 5_000)).toBe(false);
+  });
+
+  it('lets go when the widget says it is finished', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    hold.set('tower-of-hanoi', false, T0 + 5_000);
+    expect(hold.blocks('tower-of-hanoi', T0 + 5_001)).toBe(false);
+  });
+
+  // The whole point of the cap: a toy that forgets to let go, or a player who never
+  // finishes, must not end up owning the screen.
+  it('stops blocking once the cap is spent', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    expect(hold.blocks('tower-of-hanoi', T0 + HOLD_CAP_MS - 1)).toBe(true);
+    expect(hold.blocks('tower-of-hanoi', T0 + HOLD_CAP_MS)).toBe(false);
+  });
+
+  // Asking again is how a widget keeps saying "still busy"; if that reset the clock, the
+  // cap would be no cap at all.
+  it('runs the cap from the first ask, not the latest', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    hold.set('tower-of-hanoi', true, T0 + HOLD_CAP_MS - 1);
+    expect(hold.blocks('tower-of-hanoi', T0 + HOLD_CAP_MS)).toBe(false);
+  });
+
+  // A release from the board that already left must not cancel its replacement's hold.
+  it('ignores a release from a widget that is no longer the one holding', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    hold.set('suika', false, T0 + 100);
+    expect(hold.blocks('tower-of-hanoi', T0 + 200)).toBe(true);
+  });
+
+  it('drops everything when the widget is taken away', () => {
+    const hold = new CycleHold();
+    hold.set('tower-of-hanoi', true, T0);
+    hold.clear();
+    expect(hold.blocks('tower-of-hanoi', T0 + 1)).toBe(false);
   });
 });
 

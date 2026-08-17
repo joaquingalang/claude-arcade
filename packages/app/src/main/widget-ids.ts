@@ -35,6 +35,51 @@ export function wantsKeyboard(id: string): boolean {
   return id === 'snake';
 }
 
+/** The longest a widget may keep the cycle waiting, however busy it says it is. */
+export const HOLD_CAP_MS = 90_000;
+/** How soon a deferred swap looks again. Short: the wait should end when the player does. */
+export const HOLD_RECHECK_MS = 1_000;
+
+/**
+ * A widget asking the cycle clock to wait until the player has finished.
+ *
+ * The clock exists because a fidget toy has no ending, and that reasoning stops holding
+ * the moment somebody is halfway through solving one by hand. The alternative - filing
+ * such a toy as self-paced, the way a game is - would give it a game's open-ended run even
+ * when nobody is watching, which is a worse trade: an unattended toy should answer to the
+ * clock like every other. So a widget may ask for the swap to wait, but only while a
+ * person is actually mid-something, and only for so long.
+ *
+ * The cap is what makes that safe. It runs from the *first* ask rather than the latest, so
+ * a widget cannot renew its way into holding the screen forever, and it is checked rather
+ * than scheduled - a hold that outlives its cap simply stops counting.
+ */
+export class CycleHold {
+  private id: string | null = null;
+  private since = 0;
+
+  /** Start or end `id`'s hold. Asking again while already holding does not extend it. */
+  set(id: string, holding: boolean, now: number = Date.now()): void {
+    if (!holding) {
+      if (this.id === id) this.clear();
+      return;
+    }
+    if (this.id === id) return;
+    this.id = id;
+    this.since = now;
+  }
+
+  clear(): void {
+    this.id = null;
+    this.since = 0;
+  }
+
+  /** Whether the cycle has to wait rather than swap `id` out. */
+  blocks(id: string, now: number = Date.now()): boolean {
+    return this.id === id && now - this.since < HOLD_CAP_MS;
+  }
+}
+
 /**
  * Mirrors `ArrowKey` in the renderer's widget types, for the same reason `WIDGET_IDS`
  * mirrors the registry: main must not import renderer code.

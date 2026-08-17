@@ -104,6 +104,20 @@ where the frame that ends the game may well run again before the swap lands, rep
 exactly once. Give the ending some escalation while you are there: a game that can go on
 indefinitely at a fixed difficulty is a game that will.
 
+**A toy may ask the clock to wait, but only for a person.** `setHold(true)` defers the
+swap; `setHold(false)` releases it. The Tower of Hanoi is the widget it exists for: pick a
+disc up and the cycle waits until the tower is standing complete again, because being
+moved along three moves from the end of a puzzle is the same insult `finish()` protects a
+game from. Three rules come with it, and there are tests for each:
+
+- **Never hold while nobody is touching it.** A widget that holds on its own has simply
+  appointed itself a game, and every toy in `toys` is checked for this.
+- **Release on your own.** Hanoi lets go on a finished tower or after 15 seconds of no
+  interaction - a board someone walked away from stops being theirs.
+- **The cap is not yours to set.** `CycleHold` in `main/widget-ids.ts` stops honouring any
+  hold after 90 seconds, timed from the first ask so re-asking cannot extend it. The base
+  class also releases on `stop()`, so a torn-down widget never leaves the clock waiting.
+
 Constraints that are not negotiable, because they come from the window rather than from
 taste:
 
@@ -131,7 +145,8 @@ one, `widgets` directly if it is a game. Everything in `widgets` runs through th
 contract: draws every frame without throwing, `pause()` freezes the loop, `resume()` is
 idempotent, pointer events anywhere in or out of the box are survivable, and 600 frames
 leave it numerically stable. Everything in `toys` additionally has to prove it *never*
-reports done, since the clock is what moves a fidget toy along. Add a behaviour test of
+reports done and *never* asks the clock to wait while it is playing itself, since the clock
+is what moves a fidget toy along. Add a behaviour test of
 your own underneath for whatever makes your toy interesting - popping, friction, scoring -
 and for a game, one that holds it to ending however well it is played.
 

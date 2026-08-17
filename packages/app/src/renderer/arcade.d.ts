@@ -23,6 +23,13 @@ export interface ArcadeBridge {
   dismiss(): void;
   /** Tell main this widget's run is over and it is ready to hand over. */
   widgetDone(widgetId: string): void;
+  /**
+   * Ask the cycle clock to wait for a player who is midway through, or let it go again.
+   *
+   * Honoured only up to a cap in main, so a widget that forgets to let go cannot keep the
+   * screen. See `CycleHold` in main/widget-ids.ts.
+   */
+  widgetHold(widgetId: string, holding: boolean): void;
   /** Bytes of one sound sample, or null if it is not installed. See main/samples.ts. */
   readSample(name: string): Promise<Uint8Array | null>;
 }
