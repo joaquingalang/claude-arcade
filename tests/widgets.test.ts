@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buzzer, pops } from '../packages/app/src/renderer/audio';
+import { buzzer, knock, pops } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import {
@@ -11,12 +11,12 @@ import {
 import { FlappyBird } from '../packages/app/src/renderer/widgets/flappy-bird';
 import { NewtonsCradle } from '../packages/app/src/renderer/widgets/newtons-cradle';
 import { Pong } from '../packages/app/src/renderer/widgets/pong';
-import { RainStick } from '../packages/app/src/renderer/widgets/rain-stick';
 import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
 import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
 import { Suika } from '../packages/app/src/renderer/widgets/suika';
 import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
+import { TowerOfHanoi } from '../packages/app/src/renderer/widgets/tower-of-hanoi';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
 
 const SIZE = 280;
@@ -118,7 +118,7 @@ const toys: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'FidgetSpinner', make: () => new FidgetSpinner() },
   { name: 'NewtonsCradle', make: () => new NewtonsCradle() },
   { name: 'FallingSand', make: () => new FallingSand() },
-  { name: 'RainStick', make: () => new RainStick() },
+  { name: 'TowerOfHanoi', make: () => new TowerOfHanoi() },
   { name: 'ThumbPiano', make: () => new ThumbPiano() },
 ];
 
@@ -224,6 +224,21 @@ describe.each(toys)('$name is paced by the clock, not by itself', ({ make }) => 
     }
 
     expect(onDone).not.toHaveBeenCalled();
+    w.stop();
+  });
+
+  /**
+   * The hold is for a player mid-something, not a way for a toy to appoint itself a game.
+   * A toy left alone has to answer to the clock, or the rotation stops being a rotation.
+   */
+  it('never asks the clock to wait while nobody is touching it', () => {
+    const ctx = makeCtx();
+    const onHold = vi.fn();
+    const w = make();
+    w.start(ctx, { width: SIZE, height: SIZE, onHold });
+
+    pump(1800); // ~30s, twice the default cycle
+    expect(onHold).not.toHaveBeenCalledWith(true);
     w.stop();
   });
 });
@@ -986,92 +1001,224 @@ describe('FallingSand', () => {
   });
 });
 
-/** Kept in step with the tube geometry in rain-stick.ts. */
-const STICK_LEN_HINT = 0.74 * SIZE;
-const STICK_HALF_W_HINT = (0.26 * SIZE) / 2;
-const BEAD_R_HINT = 0.017 * SIZE;
-const BEAD_COUNT_HINT = 44;
+/** Kept in step with the board geometry in tower-of-hanoi.ts. */
+const HANOI_DISCS = 5;
+const HANOI_POST_X = [0.19, 0.5, 0.81].map((f) => f * SIZE);
+const HANOI_DECK_Y = 0.82 * SIZE;
 
-interface StickInternals {
-  beads: Array<{ ax: number; ay: number; vx: number; vy: number }>;
-  pegs: Array<{ ax: number; ay: number }>;
-  angle: number;
-  target: number;
-  dragging: boolean;
-  ticks: number;
+interface HanoiInternals {
+  posts: number[][];
+  goal: number;
+  flight: { disc: number; from: number; to: number } | null;
+  held: { disc: number; from: number } | null;
+  engaged: boolean;
+  wait: number;
 }
 
-describe('RainStick', () => {
+describe('TowerOfHanoi', () => {
   const start = () => {
     const ctx = makeCtx();
-    const w = new RainStick();
-    w.start(ctx, { width: SIZE, height: SIZE });
-    return { w, st: w as unknown as StickInternals };
+    const onHold = vi.fn();
+    const w = new TowerOfHanoi();
+    w.start(ctx, { width: SIZE, height: SIZE, onHold });
+    return { w, onHold, st: w as unknown as HanoiInternals };
   };
 
-  it('keeps every bead inside the tube, at any angle', () => {
-    const { w, st } = start();
-    // Haul it right round, which is the worst case for beads escaping an end.
-    for (let turn = 0; turn < 8; turn++) {
-      const a = (turn / 8) * Math.PI * 2;
-      w.onPointerDown(SIZE / 2 + Math.sin(a) * 300, SIZE / 2 + Math.cos(a) * 300);
-      pump(40);
+  /** Every disc accounted for exactly once, and never a bigger one resting on a smaller. */
+  const legal = (st: HanoiInternals): boolean => {
+    for (const post of st.posts) {
+      for (let i = 1; i < post.length; i++) {
+        if (post[i]! >= post[i - 1]!) return false;
+      }
     }
-    for (const b of st.beads) {
-      expect(Math.abs(b.ax)).toBeLessThanOrEqual(STICK_HALF_W_HINT - BEAD_R_HINT + 0.5);
-      expect(b.ay).toBeGreaterThanOrEqual(BEAD_R_HINT - 0.5);
-      expect(b.ay).toBeLessThanOrEqual(STICK_LEN_HINT - BEAD_R_HINT + 0.5);
+    const discs = [
+      ...st.posts.flat(),
+      ...(st.flight ? [st.flight.disc] : []),
+      ...(st.held ? [st.held.disc] : []),
+    ];
+    return discs.sort((a, b) => a - b).join() === [1, 2, 3, 4, 5].join();
+  };
+
+  /** Run the autopilot, counting one landing each time a disc in the air comes to rest. */
+  const run = (frames: number, st: HanoiInternals, stop?: () => boolean): number => {
+    let flying = false;
+    let landings = 0;
+    for (let f = 0; f < frames; f++) {
+      pump(1);
+      const now = st.flight !== null;
+      if (flying && !now) landings++;
+      flying = now;
+      if (stop?.()) break;
     }
-    expect(st.beads).toHaveLength(BEAD_COUNT_HINT);
+    return landings;
+  };
+
+  /**
+   * The claim the general solver has to earn.
+   *
+   * Any working solver gets the tower across eventually; only an optimal one does it in
+   * 2^n - 1. A single wasted move - the sort a from-any-position solver invites, since it
+   * cannot lean on the textbook recursion's fixed move list - shows up here as 32.
+   */
+  it('moves the whole tower across in the fewest moves there are', () => {
+    const { w, st } = start();
+    const goal = st.goal;
+    const landings = run(1800, st, () => st.posts[goal]!.length === HANOI_DISCS);
+
+    expect(st.posts[goal]).toEqual([5, 4, 3, 2, 1]);
+    expect(landings).toBe(2 ** HANOI_DISCS - 1);
     w.stop();
   });
 
-  it('pours the beads to whichever end is downhill', () => {
+  /** A solved puzzle would be a still picture on the desk, which is what a toy must not be. */
+  it('picks a new post and sets off again once the tower is home', () => {
     const { w, st } = start();
+    const first = st.goal;
+    run(1800, st, () => st.posts[first]!.length === HANOI_DISCS);
+    expect(st.posts[first]).toHaveLength(HANOI_DISCS);
 
-    // B end pointing down: beads should collect at high ay.
-    w.onPointerDown(SIZE / 2, SIZE);
     pump(240);
-    const low = st.beads.reduce((a, b) => a + b.ay, 0) / st.beads.length;
-
-    // Now flip it over.
-    w.onPointerDown(SIZE / 2, 0);
-    pump(240);
-    const high = st.beads.reduce((a, b) => a + b.ay, 0) / st.beads.length;
-
-    expect(low).toBeGreaterThan(STICK_LEN_HINT * 0.5);
-    expect(high).toBeLessThan(STICK_LEN_HINT * 0.5);
+    expect(st.goal).not.toBe(first);
+    expect(st.posts[first]!.length).toBeLessThan(HANOI_DISCS);
     w.stop();
   });
 
-  /** Left alone it has to keep turning, or a settled stick is a still picture. */
-  it('drifts on its own when nobody is holding it', () => {
+  it('hands a disc to the pointer, and refuses a drop that would break the rule', () => {
     const { w, st } = start();
-    const before = st.angle;
-    pump(120);
-    expect(st.angle).not.toBeCloseTo(before, 3);
+
+    // The smallest disc, off the full stack and onto a bare post.
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    expect(st.held?.disc).toBe(1);
+    w.onPointerMove(HANOI_POST_X[2]!, HANOI_DECK_Y - 60);
+    w.onPointerUp(HANOI_POST_X[2]!, HANOI_DECK_Y - 60);
+    expect(st.posts[2]).toEqual([1]);
+    expect(st.posts[0]).toEqual([5, 4, 3, 2]);
+
+    // Now the next disc up onto that one, which is the one move the toy is about.
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    w.onPointerUp(HANOI_POST_X[2]!, HANOI_DECK_Y - 60);
+    expect(st.posts[2]).toEqual([1]);
+    expect(st.posts[0]).toEqual([5, 4, 3, 2]);
     w.stop();
   });
 
-  it('stops drifting while you are swinging it, and follows the pointer instead', () => {
+  it('holds off while you are playing, then carries on from where you left it', () => {
     const { w, st } = start();
-    w.onPointerDown(SIZE, SIZE / 2);
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    w.onPointerUp(HANOI_POST_X[1]!, HANOI_DECK_Y - 60);
+    const board = JSON.stringify(st.posts);
+
+    // A second later it is still your board, not the autopilot's.
     pump(60);
-    expect(st.dragging).toBe(true);
-    // Pointer due right of centre means the low end should be pointing right: +pi/2.
-    expect(st.angle).toBeCloseTo(Math.PI / 2, 1);
+    expect(st.flight).toBeNull();
+    expect(JSON.stringify(st.posts)).toBe(board);
+
+    // Past the resume delay it takes over again - and carries on from the board you left
+    // rather than sweeping the discs back into an opening position.
+    pump(120);
+    expect(JSON.stringify(st.posts)).not.toBe(board);
+    expect(JSON.stringify(st.posts)).not.toBe(JSON.stringify([[5, 4, 3, 2, 1], [], []]));
+    expect(legal(st)).toBe(true);
     w.stop();
   });
 
-  /** A full cascade would otherwise ask for forty voices in one frame. */
-  it('caps how many beads can be heard in a single frame', () => {
+  it('keeps the board legal through a long run of solving and meddling', () => {
     const { w, st } = start();
-    for (let i = 0; i < 30; i++) {
-      w.onPointerDown(SIZE / 2, i % 2 === 0 ? 0 : SIZE);
-      pump(4);
-      expect(st.ticks).toBeLessThanOrEqual(4);
+    let broken = 0;
+    for (let step = 0; step < 120; step++) {
+      pump(10);
+      if (!legal(st)) broken++;
+      // Poked the way a hand pokes it, including drops that are not allowed.
+      w.onPointerDown(HANOI_POST_X[step % 3]!, HANOI_DECK_Y - 30);
+      w.onPointerMove(HANOI_POST_X[(step * 2 + 1) % 3]!, HANOI_DECK_Y - 70);
+      w.onPointerUp(HANOI_POST_X[(step * 2 + 1) % 3]!, HANOI_DECK_Y - 70);
+      if (!legal(st)) broken++;
     }
+    expect(broken).toBe(0);
     w.stop();
+  });
+
+  /**
+   * The pacing exception this toy earns.
+   *
+   * Being swapped out three moves from the end of a puzzle you are solving by hand is the
+   * same insult as a game cut off at 4-3, so touching it makes the cycle wait - and the
+   * wait ends the moment the round does.
+   */
+  it('asks the cycle to wait the moment you pick a disc up', () => {
+    const { w, onHold, st } = start();
+    expect(onHold).not.toHaveBeenCalled();
+
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    expect(onHold).toHaveBeenCalledWith(true);
+    expect(st.engaged).toBe(true);
+
+    // Grabbing a second disc is the same round, and main runs the cap from the first ask.
+    w.onPointerUp(HANOI_POST_X[1]!, HANOI_DECK_Y - 60);
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    expect(onHold.mock.calls.filter(([holding]) => holding === true)).toHaveLength(1);
+    w.stop();
+  });
+
+  it('lets the cycle go as soon as the tower is home', () => {
+    const { w, onHold, st } = start();
+    // One move from a finished round, which is the state worth protecting and a tedious
+    // one to reach thirty drags at a time.
+    st.posts = [[], [5, 4, 3, 2], [1]];
+
+    w.onPointerDown(HANOI_POST_X[2]!, HANOI_DECK_Y - 20);
+    w.onPointerUp(HANOI_POST_X[1]!, HANOI_DECK_Y - 60);
+    expect(st.posts[1]).toEqual([5, 4, 3, 2, 1]);
+
+    pump(1);
+    expect(onHold).toHaveBeenLastCalledWith(false);
+    expect(st.engaged).toBe(false);
+    w.stop();
+  });
+
+  it('lets the cycle go if you wander off mid-puzzle', () => {
+    const { w, onHold, st } = start();
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    w.onPointerUp(HANOI_POST_X[1]!, HANOI_DECK_Y - 60);
+    // Autopilot parked, so the release under test is the abandoned board rather than the
+    // toy quietly finishing the puzzle for us.
+    st.wait = Number.MAX_SAFE_INTEGER;
+
+    pump(600); // ~10s, still theirs
+    expect(onHold).not.toHaveBeenCalledWith(false);
+
+    pump(400); // past the abandon mark
+    expect(onHold).toHaveBeenLastCalledWith(false);
+    expect(st.posts.every((post) => post.length < HANOI_DISCS)).toBe(true);
+    w.stop();
+  });
+
+  it('releases the cycle when it is torn down mid-puzzle', () => {
+    const { w, onHold } = start();
+    w.onPointerDown(HANOI_POST_X[0]!, HANOI_DECK_Y - 20);
+    w.onPointerUp(HANOI_POST_X[1]!, HANOI_DECK_Y - 60);
+
+    w.stop();
+    expect(onHold).toHaveBeenLastCalledWith(false);
+  });
+
+  it('knocks as a disc lands, and stays quiet while it is in the air', () => {
+    const tick = vi.spyOn(knock, 'tick').mockImplementation(() => {});
+    const { w, st } = start();
+
+    let flying = false;
+    let landings = 0;
+    for (let f = 0; f < 200 && landings < 3; f++) {
+      pump(1);
+      const now = st.flight !== null;
+      if (flying && !now) landings++;
+      flying = now;
+      expect(tick).toHaveBeenCalledTimes(landings);
+    }
+
+    expect(landings).toBe(3);
+    w.stop();
+    tick.mockRestore();
   });
 });
 

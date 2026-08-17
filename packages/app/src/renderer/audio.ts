@@ -18,8 +18,8 @@
  * missing sample set would not make it duller, it would make it pointless - and nine
  * tuned files is a lot to ask before anything can be heard. Synthesis makes it correct by
  * construction and audible the moment sound is switched on. Simon follows for the same
- * reason, four tuned files instead of nine. The rain stick follows because a bead
- * striking a baffle is a filtered noise transient, which is nearly all a synthesiser has
+ * reason, four tuned files instead of nine. The Tower of Hanoi follows because a disc
+ * settling onto wood is a filtered noise transient, which is nearly all a synthesiser has
  * to say.
  */
 
@@ -360,24 +360,24 @@ export class Tines extends Synth {
   }
 }
 
-/** Loudest a single bead gets. Dozens land per second, so this sits well under a pop. */
-const BEAD_GAIN = 0.16;
+/** Loudest a single knock gets. A bare transient, over the top of other people's work. */
+const KNOCK_GAIN = 0.2;
 /** Seconds of noise to draw from. Long enough that reads never line up audibly. */
 const NOISE_SECONDS = 0.4;
 
-export class Beads extends Synth {
+export class Knock extends Synth {
   private noise: AudioBuffer | null = null;
 
   constructor() {
-    super(14);
+    super(6);
   }
 
   /**
-   * One bead striking a baffle.
+   * One disc settling onto wood.
    *
    * A band-passed slice of noise with a 30ms decay. The filter centre is jittered per
-   * strike, which is what stops a cascade of forty from sounding like one click repeated -
-   * the same problem the pop samples solve with four files and pitch jitter.
+   * knock, which is what stops a run of moves from sounding like one click repeated - the
+   * same problem the pop samples solve with four files and pitch jitter.
    */
   tick(level = 1): void {
     const ctx = this.begin();
@@ -389,7 +389,7 @@ export class Beads extends Synth {
     try {
       const src = ctx.createBufferSource();
       src.buffer = buffer;
-      // Start anywhere in the noise, so successive beads never read the same samples.
+      // Start anywhere in the noise, so successive knocks never read the same samples.
       const decay = 0.022 + Math.random() * 0.03;
       src.playbackRate.value = 0.8 + Math.random() * 0.8;
 
@@ -399,7 +399,7 @@ export class Beads extends Synth {
       band.Q.value = 2.5 + Math.random() * 3.5;
 
       const env = ctx.createGain();
-      const peak = BEAD_GAIN * Math.max(0.15, Math.min(1, level)) * (0.6 + Math.random() * 0.6);
+      const peak = KNOCK_GAIN * Math.max(0.15, Math.min(1, level)) * (0.6 + Math.random() * 0.6);
       env.gain.setValueAtTime(peak, now);
       env.gain.exponentialRampToValueAtTime(0.0001, now + decay);
 
@@ -418,7 +418,7 @@ export class Beads extends Synth {
     }
   }
 
-  /** White noise, generated once and reused for every bead. */
+  /** White noise, generated once and reused for every knock. */
   private buffer(ctx: AudioContext): AudioBuffer | null {
     if (this.noise) return this.noise;
     try {
@@ -573,8 +573,8 @@ export class Buzzer extends Synth {
 
 /** The thumb piano's voice. */
 export const tines = new Tines();
-/** The rain stick's beads. */
-export const beads = new Beads();
+/** The Tower of Hanoi's discs landing. */
+export const knock = new Knock();
 /** Simon's pads. */
 export const buzzer = new Buzzer();
 

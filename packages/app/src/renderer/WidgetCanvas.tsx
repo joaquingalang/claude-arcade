@@ -42,6 +42,8 @@ export function WidgetCanvas({ widgetId, generation, width, height, paused }: Pr
       height,
       // Main decides what happens next - rotate, or restart this same game in place.
       onDone: () => window.arcade.widgetDone(widgetId),
+      // And whether to wait, when the widget says someone is midway through it.
+      onHold: (holding) => window.arcade.widgetHold(widgetId, holding),
     });
 
     // Replaces the previous handler, so the widget being torn down stops receiving keys.

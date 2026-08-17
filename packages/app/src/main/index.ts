@@ -16,6 +16,8 @@ import { startServer, type RunningServer } from './server';
 import { WidgetWindow } from './widget-window';
 import { KeyboardBridge } from './keyboard';
 import {
+  CycleHold,
+  HOLD_RECHECK_MS,
   WIDGET_IDS,
   WidgetRotation,
   isSelfPaced,
@@ -42,6 +44,13 @@ let keyboard: KeyboardBridge | null = null;
  * window opened would put the sequence back at square one on every short turn.
  */
 const rotation = new WidgetRotation();
+/**
+ * Whether the widget on screen has asked the clock to wait for a player mid-something.
+ *
+ * Only ever set by the widget currently up, and cleared by every path that takes it away,
+ * so a hold cannot outlive the board it was asked for.
+ */
+const hold = new CycleHold();
 /**
  * Bumped on every swap, including a swap to the same id.
  *
@@ -107,6 +116,9 @@ function syncKeyboard(): void {
 function showWidget(id: string): void {
   currentWidgetId = id;
   generation++;
+  // The outgoing board's hold goes with it. The incoming widget asks for its own if it
+  // wants one, and nothing else may inherit a wait it never requested.
+  hold.clear();
   widgetWindow?.setWidget(id, generation);
   scheduleCycle();
   syncKeyboard();
@@ -128,13 +140,29 @@ function scheduleCycle(): void {
   // and until then nothing is allowed to cut it short.
   if (isSelfPaced(currentWidgetId)) return;
 
+  armCycle(config.get().cycleMs);
+}
+
+/**
+ * The cycle timeout itself, which may re-arm for a shorter look rather than swap.
+ *
+ * A toy someone is midway through solving asks the clock to wait (`arcade:widget-hold`),
+ * and the swap that comes due during that goes back to sleep for a second at a time
+ * instead. Deferring rather than disarming is what keeps this bounded: `CycleHold` stops
+ * blocking once its cap is spent, so the loop always ends in a swap.
+ */
+function armCycle(ms: number): void {
   cycleTimer = setTimeout(() => {
     if (!widgetWindow?.isVisible()) {
       stopCycle();
       return;
     }
+    if (hold.blocks(currentWidgetId)) {
+      armCycle(HOLD_RECHECK_MS);
+      return;
+    }
     showWidget(rotation.next(config.get().widget));
-  }, config.get().cycleMs);
+  }, ms);
 }
 
 /**
@@ -168,6 +196,7 @@ function startPlaying(id: string): void {
   dismissed = false;
   clearShowTimer();
   stopCycle();
+  hold.clear();
 
   currentWidgetId = id;
   generation++;
@@ -210,6 +239,8 @@ function reconcile(): void {
     if (!widgetWindow.isVisible()) {
       currentWidgetId = rotation.next(config.get().widget);
       generation++;
+      // As in showWidget: a fresh board starts owing the clock nothing.
+      hold.clear();
       widgetWindow.show(currentWidgetId, generation);
       scheduleCycle();
       syncKeyboard();
@@ -218,6 +249,7 @@ function reconcile(): void {
   }
 
   stopCycle();
+  hold.clear();
   widgetWindow.hide();
   // Hand the arrow keys back the moment the toy goes away, not whenever the next event
   // happens to arrive.
@@ -305,11 +337,19 @@ app.whenReady().then(() => {
     // a hand-picked widget from springing straight back at the next hook event.
     handPicked = null;
     stopCycle();
+    hold.clear();
     widgetWindow?.hide();
     syncKeyboard();
   });
   ipcMain.on('arcade:widget-done', (_e, id: string) => {
     onWidgetDone(id);
+  });
+  // Checked against the current widget for the same reason widget-done is: the report
+  // races the swap, and a hold arriving from the board that just left would pin whatever
+  // replaced it to the screen.
+  ipcMain.on('arcade:widget-hold', (_e, id: string, holding: boolean) => {
+    if (id !== currentWidgetId) return;
+    hold.set(id, holding);
   });
   // invoke, not on: the renderer is asking for bytes back. See main/samples.ts for why
   // the renderer cannot simply fetch these itself.

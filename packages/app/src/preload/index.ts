@@ -29,6 +29,7 @@ export interface ArcadeBridge {
   dragEnd(): void;
   dismiss(): void;
   widgetDone(widgetId: string): void;
+  widgetHold(widgetId: string, holding: boolean): void;
   /**
    * The bytes of one sound sample, or null if it is not installed.
    *
@@ -64,6 +65,7 @@ const bridge: ArcadeBridge = {
   dragEnd: () => ipcRenderer.send('arcade:drag-end'),
   dismiss: () => ipcRenderer.send('arcade:dismiss'),
   widgetDone: (widgetId) => ipcRenderer.send('arcade:widget-done', widgetId),
+  widgetHold: (widgetId, holding) => ipcRenderer.send('arcade:widget-hold', widgetId, holding),
   readSample: (name) => ipcRenderer.invoke('arcade:read-sample', name),
 };
 

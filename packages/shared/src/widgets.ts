@@ -17,7 +17,7 @@ export const TOY_IDS = [
   'fidget-spinner',
   'newtons-cradle',
   'falling-sand',
-  'rain-stick',
+  'tower-of-hanoi',
   'thumb-piano',
 ] as const;
 

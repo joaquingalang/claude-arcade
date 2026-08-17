@@ -4,12 +4,12 @@ import { FidgetSpinner } from './fidget-spinner';
 import { FlappyBird } from './flappy-bird';
 import { NewtonsCradle } from './newtons-cradle';
 import { Pong } from './pong';
-import { RainStick } from './rain-stick';
 import { Simon } from './simon';
 import { Snake } from './snake';
 import { SpaceInvaders } from './space-invaders';
 import { Suika } from './suika';
 import { ThumbPiano } from './thumb-piano';
+import { TowerOfHanoi } from './tower-of-hanoi';
 import type { CanvasWidget } from './types';
 
 /**
@@ -24,7 +24,7 @@ export const WIDGET_REGISTRY: Record<string, { label: string; create: () => Canv
   'fidget-spinner': { label: 'Fidget Spinner', create: () => new FidgetSpinner() },
   'newtons-cradle': { label: "Newton's Cradle", create: () => new NewtonsCradle() },
   'falling-sand': { label: 'Falling Sand', create: () => new FallingSand() },
-  'rain-stick': { label: 'Rain Stick', create: () => new RainStick() },
+  'tower-of-hanoi': { label: 'Tower of Hanoi', create: () => new TowerOfHanoi() },
   'thumb-piano': { label: 'Thumb Piano', create: () => new ThumbPiano() },
   snake: { label: 'Snake', create: () => new Snake() },
   'flappy-bird': { label: 'Flappy Bird', create: () => new FlappyBird() },
