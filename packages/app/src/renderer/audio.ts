@@ -20,7 +20,9 @@
  * construction and audible the moment sound is switched on. Simon follows for the same
  * reason, four tuned files instead of nine. The Tower of Hanoi follows because a disc
  * settling onto wood is a filtered noise transient, which is nearly all a synthesiser has
- * to say.
+ * to say. The buzz wire follows because its contact is two detuned oscillators beating
+ * against each other, which is a thing synthesis does exactly and a recording only
+ * approximates.
  */
 
 /** Copied verbatim out of `renderer/public/` at build time, so this path is stable. */
@@ -435,6 +437,87 @@ export class Knock extends Synth {
 }
 
 /**
+ * Loudest the buzz gets.
+ *
+ * Under the pads, and for the same reason they are under the pops: this is a held tone
+ * rather than a transient, and the sound of somebody else's mistake is not a thing that
+ * should carry across a room.
+ */
+const RASP_GAIN = 0.14;
+/**
+ * The two pitches the buzz is made of.
+ *
+ * Three and a bit semitones apart, so the difference between them lands at 22Hz - low
+ * enough that the ear takes it as a rattle rather than as two notes. That rattle *is* the
+ * rasp: either oscillator alone is a hum, and the pair of them is a doorbell transformer
+ * with a short in it, which is what a buzz wire actually sounds like.
+ */
+const RASP_HZ = [104, 126];
+/** Where the sawtooths are rolled off. Above this it stops rasping and starts hissing. */
+const RASP_CUTOFF = 1500;
+const RASP_SECONDS = 0.24;
+const RASP_ATTACK = 0.006;
+const RASP_RELEASE = 0.04;
+
+/**
+ * The buzz wire's contact.
+ *
+ * Synthesised, like Simon and the thumb piano, but for a slightly different reason: the
+ * sound is not carrying anything the picture doesn't - the wire lights up end to end at
+ * the same moment - so this is polish, and polish that arrives with the install rather
+ * than needing a file is polish that is actually there.
+ */
+export class Rasp extends Synth {
+  constructor() {
+    super(2);
+  }
+
+  /** Ground the wire. */
+  buzz(seconds = RASP_SECONDS): void {
+    const ctx = this.begin();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    const length = Math.max(RASP_ATTACK + RASP_RELEASE, seconds);
+    try {
+      const env = ctx.createGain();
+      // Exponential ramps cannot reach zero, hence the floor - as in Tines.pluck.
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.exponentialRampToValueAtTime(RASP_GAIN, now + RASP_ATTACK);
+      env.gain.setValueAtTime(RASP_GAIN, now + length - RASP_RELEASE);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + length);
+
+      const tame = ctx.createBiquadFilter();
+      tame.type = 'lowpass';
+      tame.frequency.value = RASP_CUTOFF;
+      tame.connect(env).connect(ctx.destination);
+
+      const oscillators = RASP_HZ.map((hz) => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(hz, now);
+        osc.connect(tame);
+        osc.start(now);
+        osc.stop(now + length + 0.02);
+        return osc;
+      });
+
+      // One voice for the pair, freed by the first of them to finish - they are started
+      // and stopped together, and counting them separately would halve the cap.
+      this.voices++;
+      oscillators[0]!.onended = () => {
+        this.voices--;
+        for (const osc of oscillators) osc.disconnect();
+        tame.disconnect();
+        env.disconnect();
+      };
+    } catch {
+      /* as everywhere here - silence rather than a throw inside a pointer handler */
+    }
+  }
+}
+
+/**
  * Simon's four pad tones, in pad order: green, red, yellow, blue.
  *
  * The original toy's pitches, and like the thumb piano's pentatonic they are load-bearing
@@ -575,6 +658,8 @@ export class Buzzer extends Synth {
 export const tines = new Tines();
 /** The Tower of Hanoi's discs landing. */
 export const knock = new Knock();
+/** The buzz wire's ring touching the wire. */
+export const rasp = new Rasp();
 /** Simon's pads. */
 export const buzzer = new Buzzer();
 

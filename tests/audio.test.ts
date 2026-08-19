@@ -679,6 +679,77 @@ describe('hanoi knock', () => {
   });
 });
 
+describe('buzz wire rasp', () => {
+  it('is silent while sound is off', async () => {
+    const { rasp } = await loadAudio();
+    rasp.buzz();
+    expect(FakeAudioContext.built).toBe(0);
+  });
+
+  /**
+   * The rattle is the whole sound, and it is not in either oscillator.
+   *
+   * Two detuned sawtooths beating against each other is what a shorted doorbell
+   * transformer does; one of them alone is a hum. So the thing worth asserting is that
+   * there are two of them, that they are not in tune, and that the beat they make lands
+   * low enough to be heard as a rattle rather than as a chord.
+   */
+  it('beats two detuned sawtooths against each other', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.buzz();
+
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(2);
+    for (const osc of ctx.oscillators) {
+      expect(osc.type).toBe('sawtooth');
+      expect(osc.started).toBe(true);
+      expect(osc.stopped).toBe(true);
+    }
+    const [low, high] = ctx.oscillators.map((o) => o.frequency.value).sort((a, b) => a - b);
+    expect(high! - low!).toBeGreaterThan(0);
+    expect(high! - low!).toBeLessThan(30);
+  });
+
+  it('rolls the top off, or it hisses instead of rasping', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.buzz();
+
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.filters).toHaveLength(1);
+    expect(ctx.filters[0]!.type).toBe('lowpass');
+  });
+
+  /** A held tone, unlike every other voice here, so it needs an ending as well as a start. */
+  it('holds the buzz for as long as it is asked for, then lets it go', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.buzz(0.5);
+
+    const env = FakeAudioContext.last!.gains[0]!.gain.events;
+    expect(env.map((e) => e.kind)).toEqual(['set', 'exp', 'set', 'exp']);
+    // Never through zero, which an exponential ramp cannot do - as in Tines.pluck.
+    for (const e of env) expect(e.value).toBeGreaterThan(0);
+    expect(env[3]!.at - env[0]!.at).toBeCloseTo(0.5, 5);
+    expect(env[3]!.value).toBeLessThan(env[1]!.value);
+  });
+
+  /** The pair is one voice. Counting them apart would halve a cap that is already small. */
+  it('counts a buzz as one voice, and frees it when the pair ends', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    for (let i = 0; i < 10; i++) rasp.buzz();
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(4);
+
+    for (const osc of [...ctx.oscillators]) osc.end();
+    rasp.buzz();
+    expect(ctx.oscillators).toHaveLength(6);
+  });
+});
+
 describe('one context for everything', () => {
   it('shares a single context across samples and synthesis', async () => {
     const { pops, tines, knock, setSoundEnabled } = await loadAudio();

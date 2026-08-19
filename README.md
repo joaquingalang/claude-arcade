@@ -171,7 +171,7 @@ Handing cmd its arguments as separate argv entries keeps Node's own quoting, and
 
 ## Widgets
 
-Twelve toys, split between fidget toys that run on a clock and games that run to an end.
+Fourteen toys, split between fidget toys that run on a clock and games that run to an end.
 All of them are mouse-only, because the window never takes keyboard focus.
 
 | id | interaction | ends when |
@@ -182,12 +182,14 @@ All of them are mouse-only, because the window never takes keyboard focus.
 | `falling-sand` | drag to pour; it piles and avalanches | never - on the clock |
 | `tower-of-hanoi` | it solves itself; drag a disc to take over | on the clock, unless you are mid-solve |
 | `thumb-piano` | press a tine, or drag across them to play a run | never - on the clock |
+| `buzz-wire` | it runs the ring along; take it and steer to the far post | on the clock, unless you are mid-run |
 | `snake` | arrow keys, or point where you want it to go | 3 lives spent |
 | `flappy-bird` | click to flap | 3 lives spent |
 | `pong` | move the pointer to slide your paddle | someone reaches 5 |
 | `simon` | click to start, then the pads back in the order they flashed | a wrong pad, 8 rounds, or never started |
 | `suika` | point to aim, click to drop; same fruit fuse | the basket empties, or the jar overflows |
 | `space-invaders` | the pointer steers; the ship fires itself | 2 waves cleared, or 3 lives |
+| `tetris` | arrow keys, or point to slide, tap to turn, hold to drop | 12 lines, or the stack tops out |
 
 Most of the games play themselves until you touch them - a toy that sits still until
 instructed is a chore. Simon is the exception, because a memory game cannot demo itself:
@@ -203,7 +205,8 @@ the next widget, or restarts in place if rotation is off.
 **A toy you are in the middle of can ask the clock to wait.** Pick up a disc on the Tower
 of Hanoi and the swap holds off until the tower is standing complete again - being moved
 along three moves from the end of a puzzle is the same insult as losing a game at 4-3. The
-wait ends on its own if you leave the board alone for 15 seconds, and never runs past 90
+buzz wire asks for the same thing, and holds until the ring reaches the far post. The wait
+ends on its own if you leave either of them alone for 15 seconds, and never runs past 90
 seconds whatever happens. Left untouched, the toy is on `cycleMs` like every other one:
 this is for a person mid-something, not a way for a toy to promote itself to a game.
 
@@ -240,27 +243,31 @@ beeps while you are on a call is a toy you uninstall. Turn it on with
 `"soundEnabled": true` in `config.json`; the flag is read on every appearance, so the edit
 lands on the next show rather than the next launch.
 
-Four widgets make a noise. **Bubble wrap plays samples** - four files named `pop-1.mp3`
+Five widgets make a noise. **Bubble wrap plays samples** - four files named `pop-1.mp3`
 through `pop-4.mp3` in `packages/app/src/renderer/public/sounds/` (see the README there for
 what makes a good one). Missing files are not an error; an install with no samples pops
-silently. **The Tower of Hanoi, thumb piano and Simon synthesise**, so they are audible the
-moment sound is switched on with nothing to download.
+silently. **The Tower of Hanoi, thumb piano, buzz wire and Simon synthesise**, so they are
+audible the moment sound is switched on with nothing to download.
 
 Sound never carries information the picture doesn't - Simon's four pitches duplicate its
 four colours rather than replacing them - so every widget is fully playable with sound off.
 
-### Snake and the arrow keys
+### The arrow keys
 
-Arrows are what Snake is actually played with, and a non-focusable window receives no
-keydown at all. So the main process registers the four arrow keys as **global**
-accelerators - but only while Snake is the widget on screen.
+Arrows are what Snake and Tetris are actually played with, and a non-focusable window
+receives no keydown at all. So the main process registers the four arrow keys as
+**global** accelerators - but only while one of those two is the widget on screen.
 
-That is a real trade, stated plainly: **while a snake is visible, the arrow keys go to the
-snake instead of your terminal.** Shell history and cursor movement are affected; ordinary
-typing is not. Three things bound it: arrows only and never letters; registered only while
-Snake is showing and handed back on hide, rotation and quit; and `"snakeKeyboard": false`
-in `config.json` turns it off entirely. Pointer steering works either way, so turning the
-grab off leaves a fully playable toy.
+That is a real trade, stated plainly: **while Snake or Tetris is visible, the arrow keys
+go to the widget instead of your terminal.** Shell history and cursor movement are
+affected; ordinary typing is not. Three things bound it: arrows only and never letters;
+registered only while a widget that asked for them is showing, and handed back on hide,
+rotation and quit; and `"arrowKeys": false` in `config.json` turns it off entirely.
+
+Both widgets are complete under the pointer, which is the price of being on that list -
+turning the grab off costs you a control scheme, not a game. Tetris says which one you
+have in the legend it opens with, so a desk that turned the arrows off is never taught a
+key that does nothing.
 
 ## Configuration
 
@@ -272,7 +279,7 @@ prints the path.
 | `widget` | `random` | a widget id, or `random` |
 | `showDelayMs` | `2500` | how long a turn must run before anything appears |
 | `cycleMs` | `15000` | time on screen per fidget toy; `0` disables cycling. Games ignore it |
-| `snakeKeyboard` | `true` | let Snake take the arrow keys system-wide while it is on screen |
+| `arrowKeys` | `true` | let Snake and Tetris take the arrow keys system-wide while on screen |
 | `position` | `null` | where you dragged it; `null` means bottom-right of the work area |
 | `soundEnabled` | `false` | let widgets make a noise. Read on every show |
 

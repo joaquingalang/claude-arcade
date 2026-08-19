@@ -35,7 +35,7 @@ npm run build                # shared + cli (tsc) and app (vite + tsc)
 ARCADE_DEBUG=1 npm run app   # just the Electron app, renderer logs to stderr
 ```
 
-`npm test` currently runs 333 tests across 9 files in about three seconds. Keep it that
+`npm test` currently runs 415 tests across 10 files in about three seconds. Keep it that
 fast; these tests are meant to be run constantly, so nothing in `tests/` should sleep, bind
 a port, or launch Electron.
 
@@ -94,7 +94,7 @@ This is the most likely reason you are here. It is three edits and a test run:
    bubble wrap. `tests/widget-ids.test.ts` asserts the two lists match exactly, in order.
 
    The rotation alternates one toy, one game, so **the two lists have to stay the same
-   length**. A seventh game without a seventh toy makes every game rarer than every toy,
+   length**. An eighth game without an eighth toy makes every game rarer than every toy,
    which is not something you would notice by watching it. There is a test for that too.
 
 **A game must end by itself.** Everything in `GAME_IDS` is exempt from the cycle clock, so
@@ -108,12 +108,14 @@ indefinitely at a fixed difficulty is a game that will.
 swap; `setHold(false)` releases it. The Tower of Hanoi is the widget it exists for: pick a
 disc up and the cycle waits until the tower is standing complete again, because being
 moved along three moves from the end of a puzzle is the same insult `finish()` protects a
-game from. Three rules come with it, and there are tests for each:
+game from. The buzz wire is the second, and holds until the ring reaches the far post.
+Three rules come with it, and there are tests for each:
 
 - **Never hold while nobody is touching it.** A widget that holds on its own has simply
   appointed itself a game, and every toy in `toys` is checked for this.
 - **Release on your own.** Hanoi lets go on a finished tower or after 15 seconds of no
-  interaction - a board someone walked away from stops being theirs.
+  interaction - a board someone walked away from stops being theirs, and the buzz wire
+  reads an untouched ring the same way.
 - **The cap is not yours to set.** `CycleHold` in `main/widget-ids.ts` stops honouring any
   hold after 90 seconds, timed from the first ask so re-asking cannot extend it. The base
   class also releases on `stop()`, so a torn-down widget never leaves the clock waiting.
@@ -125,9 +127,16 @@ taste:
   terminal, which means the widget never sees a key event of its own. Handle
   `onPointerDown`, `onPointerMove` and `onPointerUp`. `onKey` exists, but it is fed by a
   *global* arrow-key grab that main registers only while a widget in `wantsKeyboard()` is
-  on screen - which is Snake and nothing else, and a test keeps it that way. Taking keys
-  off the whole desktop is a real cost; if a toy only makes sense with a keyboard, it is
-  not a toy for this app, and if it can also be steered by the pointer, it must be.
+  on screen - which is Snake and Tetris, and a test spells out the list so that adding a
+  third means editing something that states the cost. Taking keys off the whole desktop is
+  a real cost; if a toy only makes sense with a keyboard, it is not a toy for this app, and
+  if it can also be steered by the pointer, it must be - both widgets on that list are
+  complete without a keyboard, and that is the condition for being on it.
+
+  A widget that draws its own controls gets `keyboard` in `WidgetOptions`, which is main's
+  answer about whether the arrows will actually arrive - `wantsKeyboard()` and the user's
+  `arrowKeys` setting, together. It defaults to false, so a widget that guesses instead of
+  asking is wrong in the tests and in the browser harness.
 - **`pause()` must stop the loop.** The base class handles this; don't schedule your own
   `requestAnimationFrame` or `setInterval` outside it. A desk toy burning CPU while
   invisible defeats the entire point.

@@ -10,6 +10,8 @@ export interface ShowPayload {
   height: number;
   /** Whether widgets may make noise, read fresh from config.json on every show. */
   soundEnabled: boolean;
+  /** Whether the arrow keys will reach this widget - see the preload's ShowPayload. */
+  keyboard: boolean;
 }
 
 export interface ArcadeBridge {

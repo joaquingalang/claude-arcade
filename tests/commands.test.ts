@@ -103,7 +103,7 @@ describe('resolveWidgetId', () => {
   });
 
   it('has nothing to suggest for an input that matches nothing', () => {
-    expect(resolveWidgetId('tetris')).toEqual({ found: null, candidates: [] });
+    expect(resolveWidgetId('asteroids')).toEqual({ found: null, candidates: [] });
     expect(resolveWidgetId('')).toEqual({ found: null, candidates: [] });
     expect(resolveWidgetId('---')).toEqual({ found: null, candidates: [] });
   });

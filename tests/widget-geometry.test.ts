@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
+import { BuzzWire } from '../packages/app/src/renderer/widgets/buzz-wire';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import { COLORWAYS, FidgetSpinner } from '../packages/app/src/renderer/widgets/fidget-spinner';
 import { FlappyBird } from '../packages/app/src/renderer/widgets/flappy-bird';
 import { NewtonsCradle } from '../packages/app/src/renderer/widgets/newtons-cradle';
 import { Pong } from '../packages/app/src/renderer/widgets/pong';
+import { Tetris } from '../packages/app/src/renderer/widgets/tetris';
 import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
 import { TowerOfHanoi } from '../packages/app/src/renderer/widgets/tower-of-hanoi';
 import { Simon } from '../packages/app/src/renderer/widgets/simon';
@@ -121,12 +123,14 @@ const WIDGETS: Array<[string, () => CanvasWidget]> = [
   ['falling-sand', () => new FallingSand()],
   ['tower-of-hanoi', () => new TowerOfHanoi()],
   ['thumb-piano', () => new ThumbPiano()],
+  ['buzz-wire', () => new BuzzWire()],
   ['snake', () => new Snake()],
   ['flappy-bird', () => new FlappyBird()],
   ['pong', () => new Pong()],
   ['simon', () => new Simon()],
   ['suika', () => new Suika()],
   ['space-invaders', () => new SpaceInvaders()],
+  ['tetris', () => new Tetris()],
 ];
 
 /**

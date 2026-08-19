@@ -114,6 +114,7 @@ describe('isSelfPaced', () => {
       'simon',
       'suika',
       'space-invaders',
+      'tetris',
     ]) {
       expect(isSelfPaced(id)).toBe(true);
     }
@@ -127,6 +128,7 @@ describe('isSelfPaced', () => {
       'falling-sand',
       'tower-of-hanoi',
       'thumb-piano',
+      'buzz-wire',
     ]) {
       expect(isSelfPaced(id)).toBe(false);
     }
@@ -201,10 +203,14 @@ describe('CycleHold', () => {
 
 describe('wantsKeyboard', () => {
   // The arrow keys are taken from the whole desktop while a widget that wants them is up,
-  // so this list existing at all is the reason it stays short. Snake is the only game
-  // arrows are actually the natural control for.
-  it('is snake and nothing else', () => {
-    expect(WIDGET_IDS.filter(wantsKeyboard)).toEqual(['snake']);
+  // so this list existing at all is the reason it stays short. Snake and Tetris are the
+  // two games arrows are the natural control for everywhere else; both are still complete
+  // under the pointer, which is the price of being on the list.
+  //
+  // This is a spelt-out list rather than a count on purpose: adding to it means editing a
+  // test that says what the cost is, which is the point.
+  it('is snake and tetris and nothing else', () => {
+    expect(WIDGET_IDS.filter(wantsKeyboard)).toEqual(['snake', 'tetris']);
   });
 
   it('is false for an unknown id', () => {

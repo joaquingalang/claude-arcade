@@ -17,6 +17,15 @@ export interface ShowPayload {
    * the next appearance instead of the next launch.
    */
   soundEnabled: boolean;
+  /**
+   * Whether the arrow keys will reach this widget.
+   *
+   * Both halves of the answer live in main - which widgets ask for keys, and whether the
+   * user left the grab switched on - so a widget that draws its own controls has no way
+   * to work it out, and one that guessed would be teaching half its users a control that
+   * does nothing.
+   */
+  keyboard: boolean;
 }
 
 export interface ArcadeBridge {

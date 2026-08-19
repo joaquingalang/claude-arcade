@@ -30,9 +30,16 @@ export function isSelfPaced(id: string): boolean {
   return SELF_PACED.has(id);
 }
 
-/** Widgets that want arrow keys while they are on screen. */
+/**
+ * Widgets that want arrow keys while they are on screen.
+ *
+ * The arrows are taken from the whole desktop for as long as one of these is up, so the
+ * list is short on purpose and the bar for joining it was the same both times: arrows are
+ * what the game is actually played with everywhere else, and the widget is still
+ * completely playable by pointer for anyone who leaves `arrowKeys` off.
+ */
 export function wantsKeyboard(id: string): boolean {
-  return id === 'snake';
+  return id === 'snake' || id === 'tetris';
 }
 
 /** The longest a widget may keep the cycle waiting, however busy it says it is. */

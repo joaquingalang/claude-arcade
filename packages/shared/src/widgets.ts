@@ -19,6 +19,7 @@ export const TOY_IDS = [
   'falling-sand',
   'tower-of-hanoi',
   'thumb-piano',
+  'buzz-wire',
 ] as const;
 
 /** The games: they run to their own ending and report in when they get there. */
@@ -29,6 +30,7 @@ export const GAME_IDS = [
   'simon',
   'suika',
   'space-invaders',
+  'tetris',
 ] as const;
 
 export const WIDGET_IDS = [...TOY_IDS, ...GAME_IDS] as const;

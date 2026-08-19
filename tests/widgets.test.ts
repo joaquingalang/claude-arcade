@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buzzer, knock, pops } from '../packages/app/src/renderer/audio';
+import { buzzer, knock, pops, rasp } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
+import { BuzzWire } from '../packages/app/src/renderer/widgets/buzz-wire';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import {
   COLORWAYS,
@@ -15,6 +16,7 @@ import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
 import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
 import { Suika } from '../packages/app/src/renderer/widgets/suika';
+import { ROTATIONS, Tetris } from '../packages/app/src/renderer/widgets/tetris';
 import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
 import { TowerOfHanoi } from '../packages/app/src/renderer/widgets/tower-of-hanoi';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
@@ -27,6 +29,8 @@ const SIZE = 280;
  */
 function makeCtx() {
   const calls: string[] = [];
+  /** Everything the widget wrote, so a test can read the words and not just count them. */
+  const texts: string[] = [];
   const rec =
     (name: string) =>
     (...args: unknown[]) => {
@@ -36,6 +40,7 @@ function makeCtx() {
   const gradient = { addColorStop: rec('addColorStop') };
   const ctx = {
     calls,
+    texts,
     canvas: { width: SIZE, height: SIZE },
     save: rec('save'),
     restore: rec('restore'),
@@ -55,7 +60,11 @@ function makeCtx() {
     rect: rec('rect'),
     clip: rec('clip'),
     fillRect: rec('fillRect'),
-    fillText: rec('fillText'),
+    fillText: (t: string, ...args: unknown[]) => {
+      calls.push('fillText');
+      texts.push(String(t));
+      void args;
+    },
     measureText: () => {
       calls.push('measureText');
       return { width: 10 };
@@ -84,7 +93,7 @@ function makeCtx() {
     shadowColor: '' as unknown,
     shadowBlur: 0,
   };
-  return ctx as unknown as CanvasRenderingContext2D & { calls: string[] };
+  return ctx as unknown as CanvasRenderingContext2D & { calls: string[]; texts: string[] };
 }
 
 /** Drive a widget's animation loop deterministically, without a real rAF. */
@@ -120,6 +129,7 @@ const toys: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'FallingSand', make: () => new FallingSand() },
   { name: 'TowerOfHanoi', make: () => new TowerOfHanoi() },
   { name: 'ThumbPiano', make: () => new ThumbPiano() },
+  { name: 'BuzzWire', make: () => new BuzzWire() },
 ];
 
 const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
@@ -130,6 +140,7 @@ const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'Simon', make: () => new Simon() },
   { name: 'Suika', make: () => new Suika() },
   { name: 'SpaceInvaders', make: () => new SpaceInvaders() },
+  { name: 'Tetris', make: () => new Tetris() },
 ];
 
 describe.each(widgets)('$name', ({ make }) => {
@@ -553,7 +564,15 @@ describe('Snake', () => {
     st.target = { c: 5, r: 10 };
     st.food = { c: 0, r: 0 };
     pump(12);
-    pump(60);
+    // As far as the death and not one frame further. The board comes back playing itself,
+    // so waiting a fixed stretch past the fade hands the autopilot dozens of free frames -
+    // and once in a while it spends the *next* life in them, which surfaces as a test
+    // about counting lives failing for a reason that has nothing to do with counting.
+    let waited = 0;
+    while (st.dying && !st.over && waited < 120) {
+      pump(1);
+      waited++;
+    }
   };
 
   it('steers with the arrow keys', () => {
@@ -1378,6 +1397,264 @@ describe('ThumbPiano', () => {
     pump(120); // ~2s, past the ring time
     expect(st.tines[3]!.ring).toBe(0);
     w.stop();
+  });
+});
+
+interface BuzzInternals {
+  wire: Array<{ x: number; y: number }>;
+  length: number;
+  pos: number;
+  offset: number;
+  dir: 1 | -1;
+  phase: 'run' | 'buzz' | 'arrived';
+  lamp: 'off' | 'good' | 'bad';
+  wait: number;
+  dragging: boolean;
+  engaged: boolean;
+  /** The tolerance in pixels, read rather than recomputed so the test cannot drift off it. */
+  touch: number;
+  sample(at: number): { x: number; y: number; nx: number; ny: number };
+  ringCentre(): { x: number; y: number };
+}
+
+describe('BuzzWire', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const onHold = vi.fn();
+    const w = new BuzzWire();
+    w.start(ctx, { width: SIZE, height: SIZE, onHold });
+    return { w, onHold, st: w as unknown as BuzzInternals };
+  };
+
+  /** How far the ring's centre actually sits off the wire, which is the only thing at stake. */
+  const strayed = (st: BuzzInternals): number => {
+    const spot = st.sample(st.pos);
+    const ring = st.ringCentre();
+    return Math.hypot(ring.x - spot.x, ring.y - spot.y);
+  };
+
+  /**
+   * What the toy looks like with nobody watching.
+   *
+   * Weaving inside the tolerance rather than running down the middle is the whole picture -
+   * but an autopilot that weaved as far as the tolerance would set its own buzzer off, and
+   * a toy that buzzes at nobody reads as broken.
+   */
+  it('runs the ring along by itself, close to the wire and never touching it', () => {
+    const { w, st } = start();
+    let moved = false;
+    let nearest = 0;
+    for (let f = 0; f < 900; f++) {
+      const before = st.pos;
+      pump(1);
+      if (st.pos !== before) moved = true;
+      if (st.phase === 'run') nearest = Math.max(nearest, Math.abs(st.offset));
+      expect(st.phase).not.toBe('buzz');
+      expect(st.lamp).not.toBe('bad');
+      expect(strayed(st)).toBeLessThan(st.touch);
+    }
+
+    expect(moved).toBe(true);
+    // Close enough that the near miss reads as one, which is the point of the wobble.
+    expect(nearest).toBeGreaterThan(st.touch * 0.25);
+    w.stop();
+  });
+
+  /** Fifteen seconds is two courses and a bit, so it has to turn round to still be moving. */
+  it('reaches the far post, then sets off back the other way', () => {
+    const { w, st } = start();
+    let arrived = 0;
+    let lit = false;
+    const headings = new Set<number>();
+    let wasThere = false;
+    for (let f = 0; f < 900; f++) {
+      pump(1);
+      headings.add(st.dir);
+      const there = st.phase === 'arrived';
+      if (there && !wasThere) arrived++;
+      wasThere = there;
+      lit ||= there && st.lamp === 'good';
+    }
+
+    expect(arrived).toBeGreaterThan(1);
+    expect(lit).toBe(true);
+    expect([...headings].sort()).toEqual([-1, 1]);
+    w.stop();
+  });
+
+  it('hands the ring to a hand that reaches for it, and not to one that does not', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+
+    w.onPointerDown(ring.x + SIZE / 2, ring.y + SIZE / 2);
+    expect(st.dragging).toBe(false);
+    w.onPointerUp(ring.x + SIZE / 2, ring.y + SIZE / 2);
+
+    w.onPointerDown(ring.x, ring.y);
+    expect(st.dragging).toBe(true);
+    w.stop();
+  });
+
+  it('carries the ring along the wire, held where the hand is holding it', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+
+    // Further along the course, off to one side but inside the tolerance.
+    const ahead = st.sample(st.length * 0.05);
+    w.onPointerMove(ahead.x + ahead.nx * st.touch * 0.5, ahead.y + ahead.ny * st.touch * 0.5);
+
+    expect(st.phase).toBe('run');
+    expect(st.pos).toBeGreaterThan(0);
+    // Near the offset rather than exactly it: the course is 160 straight segments, so the
+    // foot of the perpendicular from a point pushed out along one sampled normal lands a
+    // hair off that sample, by an amount that depends on how hard the wire bends there.
+    // What is being claimed is that the ring is held out where the hand put it rather
+    // than snapped back to the middle of the wire.
+    expect(Math.abs(strayed(st) - st.touch * 0.5)).toBeLessThan(st.touch * 0.02);
+    w.stop();
+  });
+
+  /**
+   * The threading rule, at the one moment it matters.
+   *
+   * A hand that jerks away drags the ring against the wire rather than carrying it off the
+   * board - so the ring ends up exactly at the tolerance, pinned on the side the hand went,
+   * however far away that hand now is.
+   */
+  it('cannot be pulled off the wire, however hard it is yanked', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+
+    expect(st.phase).toBe('buzz');
+    expect(strayed(st)).toBeCloseTo(st.touch, 6);
+    // Dropped, which is the whole penalty: the next move is a fresh reach.
+    expect(st.dragging).toBe(false);
+    w.stop();
+  });
+
+  /**
+   * Why the search for the nearest point is windowed.
+   *
+   * Unwindowed, a hand held over a later fold of the course would find its nearest point
+   * there and the ring would appear beside it - a ring hopping across the wire rather than
+   * sliding along it, which is the ring coming off by another name.
+   */
+  it('will not hop the ring across a fold to meet the hand', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+
+    const far = st.sample(st.length * 0.9);
+    w.onPointerMove(far.x, far.y);
+    expect(st.pos).toBeLessThan(st.length * 0.2);
+    w.stop();
+  });
+
+  it('rasps on contact, and stays quiet through a clean run', () => {
+    const buzz = vi.spyOn(rasp, 'buzz').mockImplementation(() => {});
+    const { w, st } = start();
+
+    pump(300); // five seconds of autopilot, which must not set it off
+    expect(buzz).not.toHaveBeenCalled();
+
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+    expect(buzz).toHaveBeenCalledTimes(1);
+    w.stop();
+    buzz.mockRestore();
+  });
+
+  it('sends the ring back to the start of the course after a buzz', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+
+    pump(60); // past the buzz
+    expect(st.phase).toBe('run');
+    expect(st.pos).toBe(0);
+    expect(st.offset).toBe(0);
+    expect(st.lamp).toBe('off');
+    w.stop();
+  });
+
+  it('starts the course that leads away from whichever post the ring is on', () => {
+    const { w, st } = start();
+    st.pos = st.length;
+    const ring = st.ringCentre();
+
+    w.onPointerDown(ring.x, ring.y);
+    expect(st.dragging).toBe(true);
+    expect(st.dir).toBe(-1);
+    w.stop();
+  });
+
+  /**
+   * The pacing exception this toy earns, asked for on the reach rather than on the grab: a
+   * ring that sets off from under a hand already going for it is the same insult, one beat
+   * earlier.
+   */
+  it('asks the cycle to wait the moment you reach for the ring', () => {
+    const { w, onHold, st } = start();
+    expect(onHold).not.toHaveBeenCalled();
+
+    // Deliberately nowhere near the ring - reaching is enough.
+    w.onPointerDown(0, 0);
+    expect(onHold).toHaveBeenCalledWith(true);
+    expect(st.engaged).toBe(true);
+
+    // A second reach is the same run, and main runs the cap from the first ask.
+    w.onPointerUp(0, 0);
+    w.onPointerDown(0, 0);
+    expect(onHold.mock.calls.filter(([holding]) => holding === true)).toHaveLength(1);
+    w.stop();
+  });
+
+  it('lets the cycle go as soon as the ring reaches the far post', () => {
+    const { w, onHold, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+
+    // A hair from the end, which is the state worth protecting and a slow one to steer to.
+    st.pos = st.length * 0.95;
+    const post = st.wire[st.wire.length - 1]!;
+    w.onPointerMove(post.x, post.y);
+
+    expect(st.phase).toBe('arrived');
+    expect(st.lamp).toBe('good');
+    expect(onHold).toHaveBeenLastCalledWith(false);
+    expect(st.engaged).toBe(false);
+    w.stop();
+  });
+
+  it('lets the cycle go if you wander off mid-course', () => {
+    const { w, onHold, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerUp(ring.x, ring.y);
+    // Autopilot parked, so the release under test is the abandoned course rather than the
+    // toy quietly finishing the run for us.
+    st.wait = Number.MAX_SAFE_INTEGER;
+
+    pump(600); // ~10s, still theirs
+    expect(onHold).not.toHaveBeenCalledWith(false);
+
+    pump(400); // past the abandon mark
+    expect(onHold).toHaveBeenLastCalledWith(false);
+    w.stop();
+  });
+
+  it('releases the cycle when it is torn down mid-course', () => {
+    const { w, onHold, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+
+    w.stop();
+    expect(onHold).toHaveBeenLastCalledWith(false);
   });
 });
 
@@ -2206,5 +2483,467 @@ describe('SpaceInvaders', () => {
     pump(2);
     expect(st.lives).toBe(0);
     expect(st.result).toBe('loss');
+  });
+});
+
+/** Kept in step with the well and the target in tetris.ts. */
+const TETRIS_COLS_HINT = 10;
+const TETRIS_ROWS_HINT = 16;
+const TETRIS_TARGET_HINT = 12;
+
+interface TetrisInternals {
+  board: number[];
+  kind: number;
+  rot: number;
+  col: number;
+  row: number;
+  lines: number;
+  clearing: number[];
+  clearTimer: number;
+  fallTimer: number;
+  phase: 'play' | 'clearing' | 'over';
+  result: 'win' | 'loss' | null;
+  mode: 'auto' | 'pointer' | 'keys';
+  plan: { rot: number; col: number } | null;
+  pointerX: number | null;
+  softUntil: number;
+  guide: number;
+  cell: number;
+  originX: number;
+}
+
+describe('Tetris', () => {
+  /**
+   * `keyboard` is main's answer about the arrow grab, and it defaults to off here for the
+   * same reason it does in `WidgetOptions`: a widget must be honest where nobody has said.
+   */
+  const start = (keyboard = false) => {
+    const ctx = makeCtx();
+    const onDone = vi.fn();
+    const w = new Tetris();
+    w.start(ctx, { width: SIZE, height: SIZE, keyboard, onDone });
+    return { w, ctx, onDone, st: w as unknown as TetrisInternals };
+  };
+
+  /** The middle of a column, in canvas coordinates - where a hand aiming at it would be. */
+  const overColumn = (st: TetrisInternals, col: number): number =>
+    st.originX + (col + 0.5) * st.cell;
+
+  const at = (st: TetrisInternals, row: number, col: number): number =>
+    st.board[row * TETRIS_COLS_HINT + col]!;
+
+  const fillRow = (st: TetrisInternals, row: number, kind = 0) => {
+    for (let c = 0; c < TETRIS_COLS_HINT; c++) st.board[row * TETRIS_COLS_HINT + c] = kind;
+  };
+
+  /** Cells with a gap under them - what the scorer is mostly there to avoid. */
+  const holes = (st: TetrisInternals): number => {
+    let count = 0;
+    for (let c = 0; c < TETRIS_COLS_HINT; c++) {
+      let roofed = false;
+      for (let r = 0; r < TETRIS_ROWS_HINT; r++) {
+        if (at(st, r, c) !== -1) roofed = true;
+        else if (roofed) count++;
+      }
+    }
+    return count;
+  };
+
+  /** Frames a piece takes to fall one row, over an empty well with no button held. */
+  const fallFrames = (st: TetrisInternals): number => {
+    st.board.fill(-1);
+    st.row = 0;
+    st.fallTimer = 0;
+    let frames = 0;
+    while (st.row === 0 && frames < 200) {
+      pump(1);
+      frames++;
+    }
+    return frames;
+  };
+
+  it('opens on an empty well with a piece already falling', () => {
+    const { w, st } = start();
+    expect(st.board).toHaveLength(TETRIS_COLS_HINT * TETRIS_ROWS_HINT);
+    expect(st.board.every((v) => v === -1)).toBe(true);
+    expect(st.row).toBe(0);
+    w.stop();
+  });
+
+  /**
+   * Every rotation has to keep its four cells inside a box the piece can be tested
+   * against, or `hits` is checking the piece against a wall the player cannot see.
+   */
+  it('turns every piece four ways without losing or doubling up a cell', () => {
+    for (const states of ROTATIONS) {
+      expect(states).toHaveLength(4);
+      for (const cells of states) {
+        expect(cells).toHaveLength(4);
+        expect(new Set(cells.map((c) => `${c.x},${c.y}`)).size).toBe(4);
+        for (const c of cells) {
+          expect(c.x).toBeGreaterThanOrEqual(0);
+          expect(c.y).toBeGreaterThanOrEqual(0);
+          expect(c.x).toBeLessThan(4);
+          expect(c.y).toBeLessThan(4);
+        }
+      }
+    }
+  });
+
+  it('plays itself until somebody points at it', () => {
+    const { w, st } = start();
+    expect(st.mode).toBe('auto');
+    expect(st.plan).not.toBeNull();
+    expect(st.pointerX).toBeNull();
+
+    pump(1500); // ~24s, a good many pieces
+    expect(st.lines).toBeGreaterThan(0);
+    // The weights earn their keep by keeping the stack open, not by scoring quickly. The
+    // bound is loose on purpose: over 200 sampled runs this lands on 1 hole in the median
+    // and never got past 6, while a scorer that stopped counting holes buries them by the
+    // dozen. Tightening it to the observed worst case buys nothing and flakes.
+    expect(holes(st)).toBeLessThan(10);
+    w.stop();
+  });
+
+  it('lands a piece and leaves it in the stack', () => {
+    const { w, st } = start();
+    let landed = false;
+    for (let f = 0; f < 900 && !landed; f++) {
+      pump(1);
+      landed = st.board.some((v) => v !== -1);
+    }
+    expect(landed).toBe(true);
+    w.stop();
+  });
+
+  it('hands the piece over to the pointer, a column at a time', () => {
+    const { w, st } = start();
+    w.onPointerMove(overColumn(st, 0), SIZE / 2);
+    expect(st.mode).toBe('pointer');
+    expect(st.plan).toBeNull();
+
+    // Walked rather than teleported, so it still has to get past what is already stacked.
+    const from = st.col;
+    pump(1);
+    expect(Math.abs(st.col - from)).toBeLessThanOrEqual(1);
+
+    pump(40);
+    expect(st.col).toBe(0);
+    w.stop();
+  });
+
+  it('centres the piece on the pointer rather than hanging it off one side', () => {
+    const { w, st } = start();
+    const want = 6;
+    w.onPointerMove(overColumn(st, want), SIZE / 2);
+    pump(40);
+
+    const cells = ROTATIONS[st.kind]![st.rot]!;
+    const min = Math.min(...cells.map((c) => c.x));
+    const max = Math.max(...cells.map((c) => c.x));
+    const middle = st.col + (min + max + 1) / 2;
+    expect(Math.abs(middle - (want + 0.5))).toBeLessThanOrEqual(0.5);
+    w.stop();
+  });
+
+  /** The whole control scheme rests on this split, so it is pinned from both sides. */
+  it('turns the piece on a tap', () => {
+    const { w, st } = start();
+    w.onPointerDown(overColumn(st, 4), SIZE / 2);
+    const before = st.rot;
+    pump(2);
+    w.onPointerUp(overColumn(st, 4), SIZE / 2);
+
+    expect(st.rot).toBe((before + 1) % 4);
+    w.stop();
+  });
+
+  it('reads a press held past a tap as a drop, and does not turn on the way up', () => {
+    const { w, st } = start();
+    w.onPointerMove(overColumn(st, 4), SIZE / 2);
+    pump(30);
+    const drifted = st.row;
+    w.stop();
+
+    const { w: held, st: hst } = start();
+    held.onPointerDown(overColumn(hst, 4), SIZE / 2);
+    pump(30);
+    const dropped = hst.row;
+    const turned = hst.rot;
+    held.onPointerUp(overColumn(hst, 4), SIZE / 2);
+
+    expect(dropped).toBeGreaterThan(drifted);
+    // Turning here would be answering an instruction from half a second ago.
+    expect(hst.rot).toBe(turned);
+    held.stop();
+  });
+
+  it('speeds up as the lines go in, so it cannot settle at one pace', () => {
+    const { w, st } = start();
+    w.onPointerMove(overColumn(st, 4), SIZE / 2);
+    const early = fallFrames(st);
+
+    st.lines = TETRIS_TARGET_HINT - 1;
+    expect(fallFrames(st)).toBeLessThan(early);
+    w.stop();
+  });
+
+  /**
+   * Two rows at once, which is the case the collapse is written for.
+   *
+   * Filtering the full rows out and padding the top is the obvious implementation and it
+   * is wrong: with a gap between the two cleared rows, what lies between them falls by one
+   * and what lies above falls by two, which only comes out right one cleared row at a time.
+   */
+  it('drops the stack into two cleared rows, each by its own row', () => {
+    const { w, st } = start();
+    const floor = TETRIS_ROWS_HINT - 1;
+    fillRow(st, floor);
+    fillRow(st, floor - 2);
+    st.board[(floor - 1) * TETRIS_COLS_HINT + 2] = 3;
+    st.board[(floor - 3) * TETRIS_COLS_HINT + 7] = 5;
+
+    st.clearing = [floor - 2, floor];
+    st.clearTimer = 0.001;
+    st.phase = 'clearing';
+    pump(1);
+
+    expect(st.phase).toBe('play');
+    expect(st.lines).toBe(2);
+    expect(at(st, floor, 2)).toBe(3);
+    expect(at(st, floor - 1, 7)).toBe(5);
+    expect(at(st, floor - 2, 2)).toBe(-1);
+    w.stop();
+  });
+
+  it('wins at the line target, and hands over exactly once', () => {
+    const { w, onDone, st } = start();
+    fillRow(st, TETRIS_ROWS_HINT - 1);
+    st.lines = TETRIS_TARGET_HINT - 1;
+    st.clearing = [TETRIS_ROWS_HINT - 1];
+    st.clearTimer = 0.001;
+    st.phase = 'clearing';
+
+    pump(1);
+    expect(st.lines).toBe(TETRIS_TARGET_HINT);
+    expect(st.result).toBe('win');
+    expect(onDone).not.toHaveBeenCalled();
+
+    pump(150); // past the result pause
+    expect(onDone).toHaveBeenCalledTimes(1);
+    pump(150);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  /** No room for the piece it is holding is the only way to lose, and it ends there. */
+  it('ends the run when the stack reaches the top', () => {
+    const { w, onDone, st } = start();
+    // Every cell but one column: the well is full to the top without a row being full,
+    // which would otherwise clear the board out from under the test.
+    for (let r = 0; r < TETRIS_ROWS_HINT; r++) {
+      for (let c = 1; c < TETRIS_COLS_HINT; c++) st.board[r * TETRIS_COLS_HINT + c] = 0;
+    }
+
+    pump(60);
+    expect(st.phase).toBe('over');
+    expect(st.result).toBe('loss');
+
+    pump(150); // past the result pause
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+
+  /** The cells the falling piece occupies right now, in board coordinates. */
+  const occupied = (st: TetrisInternals) =>
+    ROTATIONS[st.kind]![st.rot]!.map((c) => ({ row: st.row + c.y, col: st.col + c.x }));
+
+  it('walks the piece a column at a time on left and right', () => {
+    const { w, st } = start(true);
+    const from = st.col;
+
+    w.onKey('Left');
+    expect(st.col).toBe(from - 1);
+    w.onKey('Right');
+    w.onKey('Right');
+    expect(st.col).toBe(from + 1);
+    w.stop();
+  });
+
+  it('turns the piece on up', () => {
+    const { w, st } = start(true);
+    const before = st.rot;
+    w.onKey('Up');
+    expect(st.rot).toBe((before + 1) % 4);
+    w.stop();
+  });
+
+  /**
+   * Down is a soft drop, not a single row.
+   *
+   * A global accelerator repeats at the desktop's key-repeat rate, which is both slower
+   * than a drop should feel and different on every machine. So a press has to buy a
+   * moment of fast fall rather than exactly one row, or holding the key reads as a stutter
+   * on one desk and a drop on the next.
+   */
+  it('drops on down, and keeps falling fast for a moment after the press', () => {
+    const { w, st } = start(true);
+    const from = st.row;
+
+    w.onKey('Down');
+    expect(st.row).toBe(from + 1);
+
+    pump(4); // ~64ms, far less than one ordinary fall
+    expect(st.row).toBeGreaterThan(from + 1);
+    w.stop();
+  });
+
+  it('goes back to the ordinary fall once the key stops repeating', () => {
+    const { w, st } = start(true);
+    w.onKey('Down');
+
+    pump(20); // ~320ms, past the hold the press bought
+    const settled = st.row;
+    pump(4);
+    expect(st.row).toBe(settled);
+    w.stop();
+  });
+
+  it('takes over from the autopilot, and back from the pointer', () => {
+    const { w, st } = start(true);
+    expect(st.mode).toBe('auto');
+
+    w.onKey('Left');
+    expect(st.mode).toBe('keys');
+    expect(st.plan).toBeNull();
+
+    w.onPointerMove(overColumn(st, 8), SIZE / 2);
+    expect(st.mode).toBe('pointer');
+
+    w.onKey('Right');
+    expect(st.mode).toBe('keys');
+    // Or the piece would be dragged back to a cursor nobody has moved since.
+    expect(st.pointerX).toBeNull();
+    w.stop();
+  });
+
+  /** Pressing into a wall still means "I am driving now", as it does in Snake. */
+  it('stops at the wall without letting go of the keyboard', () => {
+    const { w, st } = start(true);
+    for (let i = 0; i < 12; i++) w.onKey('Left');
+    const wall = st.col;
+
+    w.onKey('Left');
+    expect(st.col).toBe(wall);
+    expect(st.mode).toBe('keys');
+    expect(occupied(st).every((c) => c.col >= 0)).toBe(true);
+    w.stop();
+  });
+
+  it('will not walk the piece into the stack', () => {
+    const { w, st } = start(true);
+    for (let r = 0; r < TETRIS_ROWS_HINT; r++) {
+      st.board[r * TETRIS_COLS_HINT + 8] = 0;
+      st.board[r * TETRIS_COLS_HINT + 9] = 0;
+    }
+
+    for (let i = 0; i < 12; i++) w.onKey('Right');
+    for (const c of occupied(st)) expect(at(st, c.row, c.col)).toBe(-1);
+    w.stop();
+  });
+
+  it('will not drive the piece through the floor', () => {
+    const { w, st } = start(true);
+    for (let i = 0; i < 40; i++) w.onKey('Down');
+
+    for (const c of occupied(st)) expect(c.row).toBeLessThan(TETRIS_ROWS_HINT);
+    w.stop();
+  });
+
+  it('ignores keys once the run is over', () => {
+    const { w, st } = start(true);
+    st.phase = 'over';
+    const before = { rot: st.rot, col: st.col, row: st.row };
+
+    expect(() => {
+      for (const key of ['Left', 'Right', 'Up', 'Down'] as const) w.onKey(key);
+    }).not.toThrow();
+    expect({ rot: st.rot, col: st.col, row: st.row }).toEqual(before);
+    w.stop();
+  });
+
+  /**
+   * The legend, which is the only thing on screen that says how any of this is played.
+   *
+   * Neither scheme is guessable from a Tetris board - nothing about it suggests holding
+   * the button drops the piece - and both are worth two seconds at the top of a run.
+   */
+  it('opens by saying how it is played, then gets out of the way', () => {
+    const { w, ctx, st } = start(true);
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('move');
+    expect(ctx.texts.join(' ')).toContain('turn');
+    expect(ctx.texts.join(' ')).toContain('drop');
+
+    pump(220); // ~3.5s, past the legend and its fade
+    expect(st.guide).toBe(0);
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).not.toContain('move');
+    w.stop();
+  });
+
+  /**
+   * Whether the arrows are live is main's answer, not this widget's guess: they are only
+   * registered for the widgets that ask, and the user can switch the grab off entirely.
+   * Teaching a control that does nothing is worse than teaching nothing.
+   */
+  it('names the arrow keys only when the arrow keys will arrive', () => {
+    const withKeys = start(true);
+    pump(1);
+    expect(withKeys.ctx.texts.join(' ')).toContain('\u2190');
+    withKeys.w.stop();
+
+    const without = start(false);
+    pump(1);
+    const said = without.ctx.texts.join(' ');
+    expect(said).not.toContain('\u2190');
+    expect(said).toContain('point');
+    without.w.stop();
+  });
+
+  it('puts the legend away once somebody starts playing, without blinking it out', () => {
+    const { w, st } = start(true);
+    pump(1);
+    expect(st.guide).toBeGreaterThan(1);
+
+    w.onKey('Left');
+    expect(st.guide).toBeLessThanOrEqual(0.7);
+    // Faded rather than cut: a legend that vanished on the frame you touched the widget
+    // would read as something breaking.
+    expect(st.guide).toBeGreaterThan(0);
+    w.stop();
+  });
+
+  it('puts the legend away for a hand on the mouse too', () => {
+    const { w, st } = start(false);
+    pump(1);
+    const before = st.guide;
+
+    w.onPointerMove(overColumn(st, 4), SIZE / 2);
+    expect(st.guide).toBeLessThan(before);
+    w.stop();
+  });
+  /** Games are exempt from the cycle clock, so one that never ends holds the screen. */
+  it('reaches an ending on its own, left alone', () => {
+    const { w, onDone, st } = start();
+    for (let f = 0; f < 12000 && onDone.mock.calls.length === 0; f++) pump(1);
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(st.phase).toBe('over');
+    expect(st.result).not.toBeNull();
+    w.stop();
   });
 });

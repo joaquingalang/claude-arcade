@@ -12,12 +12,13 @@ export interface ArcadeConfig {
    */
   cycleMs: number;
   /**
-   * Let Snake take the arrow keys, system wide, while it is on screen.
+   * Let a widget that asks for them take the arrow keys, system wide, while it is up.
    *
    * The one setting that trades away the app's "your keystrokes always reach the
-   * terminal" guarantee, which is why it is a setting at all.
+   * terminal" guarantee, which is why it is a setting at all. See `wantsKeyboard` for
+   * which widgets ask; every one of them is fully playable by pointer without this.
    */
-  snakeKeyboard: boolean;
+  arrowKeys: boolean;
   soundEnabled: boolean;
   position: { x: number; y: number } | null;
 }
@@ -26,10 +27,31 @@ const DEFAULTS: ArcadeConfig = {
   widget: 'random',
   showDelayMs: 2500,
   cycleMs: 15_000,
-  snakeKeyboard: true,
+  arrowKeys: true,
   soundEnabled: false,
   position: null,
 };
+
+/** Settings under an older name, still honoured on read. */
+interface LegacyConfig {
+  /** `arrowKeys` before a second widget wanted them. */
+  snakeKeyboard?: boolean;
+}
+
+/**
+ * What was read off disk, with old names folded into current ones and dropped.
+ *
+ * The old key is applied *under* the current one, so a file carrying both is read by the
+ * current one, and it is stripped so the next save stops writing it. This exists for a
+ * single setting and a single direction: somebody who turned the arrow grab off did so
+ * deliberately, and a rename that quietly handed their arrow keys back to the app would
+ * be the worst kind of upgrade.
+ */
+function migrate(parsed: Partial<ArcadeConfig> & LegacyConfig): Partial<ArcadeConfig> {
+  const { snakeKeyboard, ...current } = parsed;
+  if (snakeKeyboard === undefined) return current;
+  return { arrowKeys: snakeKeyboard, ...current };
+}
 
 /**
  * Plain JSON, not SQLite.
@@ -53,8 +75,8 @@ export class ConfigStore {
     try {
       const text = fs.readFileSync(this.file, 'utf8');
       this.stamp = this.mtime();
-      const parsed = JSON.parse(text) as Partial<ArcadeConfig>;
-      return { ...DEFAULTS, ...parsed };
+      const parsed = JSON.parse(text) as Partial<ArcadeConfig> & LegacyConfig;
+      return { ...DEFAULTS, ...migrate(parsed) };
     } catch {
       this.stamp = 0;
       return { ...DEFAULTS };

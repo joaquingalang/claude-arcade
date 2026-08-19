@@ -108,7 +108,7 @@ function syncKeyboard(): void {
   const want =
     (widgetWindow?.isVisible() ?? false) &&
     wantsKeyboard(currentWidgetId) &&
-    config.get().snakeKeyboard;
+    config.get().arrowKeys;
   keyboard?.setActive(want);
 }
 
@@ -306,6 +306,9 @@ async function bootstrap(): Promise<void> {
     path.join(__dirname, '..', 'preload', 'index.js'),
     (pos) => config.update({ position: pos }),
     () => config.get().soundEnabled,
+    // Not `keyboard.isActive()`: this answers what the widget being shown may expect,
+    // which is settled before the grab itself is reconciled.
+    (id) => wantsKeyboard(id) && config.get().arrowKeys,
   );
   widgetWindow.create(config.get().position);
 
