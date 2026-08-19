@@ -460,6 +460,32 @@ const RASP_ATTACK = 0.006;
 const RASP_RELEASE = 0.04;
 
 /**
+ * The finished-course chime: a major triad, rising.
+ *
+ * These are Simon's four pads an octave up, minus the repeat - nothing forces that, but
+ * two widgets in one app sounding like they came out of the same toy is worth having for
+ * free, and A major was already chosen here for the property that matters: whatever
+ * lands, it lands consonant.
+ *
+ * Struck and left to ring rather than held. The buzz is the sustained sound in this
+ * widget and the two endings a course has must not be confusable from across a room -
+ * one is a low rattle you sit in, the other is three bright notes that are gone before
+ * the ring is back in your hand.
+ */
+const CHIME_HZ = [880, 1108.73, 1318.51];
+const CHIME_STEP = 0.085;
+const CHIME_SECONDS = 0.3;
+const CHIME_ATTACK = 0.008;
+/**
+ * Quieter than the buzz, and deliberately.
+ *
+ * The lamp already said the course was finished, so this is polish; and these pitches sit
+ * where the ear is most sensitive, so matching the buzz's number would not match its
+ * loudness - it would be the brightest thing on the desktop.
+ */
+const CHIME_GAIN = 0.1;
+
+/**
  * The buzz wire's contact.
  *
  * Synthesised, like Simon and the thumb piano, but for a slightly different reason: the
@@ -513,6 +539,57 @@ export class Rasp extends Synth {
       };
     } catch {
       /* as everywhere here - silence rather than a throw inside a pointer handler */
+    }
+  }
+
+  /**
+   * Reach the far post - the other thing that can happen to a course.
+   *
+   * Scheduled on the audio clock rather than fired note by note from the frame loop, as
+   * Simon's flourish is: three notes 85ms apart are a figure, and a rAF loop placing them
+   * would jitter each one by up to a frame and turn it into a stumble.
+   */
+  chime(): void {
+    const ctx = this.begin();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    try {
+      const envs: GainNode[] = [];
+      const oscillators: OscillatorNode[] = [];
+      for (const [i, hz] of CHIME_HZ.entries()) {
+        const at = now + i * CHIME_STEP;
+
+        const env = ctx.createGain();
+        // Exponential ramps cannot reach zero, hence the floor - as in Tines.pluck.
+        env.gain.setValueAtTime(0.0001, at);
+        env.gain.exponentialRampToValueAtTime(CHIME_GAIN, at + CHIME_ATTACK);
+        env.gain.exponentialRampToValueAtTime(0.0001, at + CHIME_SECONDS);
+
+        // Triangle, where the buzz is sawtooth: nearly all fundamental, so three of them
+        // overlapping stay a chord rather than piling into a blare.
+        const osc = ctx.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(hz, at);
+        osc.connect(env).connect(ctx.destination);
+        osc.start(at);
+        osc.stop(at + CHIME_SECONDS + 0.02);
+
+        envs.push(env);
+        oscillators.push(osc);
+      }
+
+      // One voice for the figure, freed by the last note to finish - the same reason the
+      // buzz counts its pair once, and here it also keeps a two-voice cap from swallowing
+      // its own second and third notes.
+      this.voices++;
+      oscillators[oscillators.length - 1]!.onended = () => {
+        this.voices--;
+        for (const osc of oscillators) osc.disconnect();
+        for (const env of envs) env.disconnect();
+      };
+    } catch {
+      /* as above - silence rather than a throw inside a pointer handler */
     }
   }
 }

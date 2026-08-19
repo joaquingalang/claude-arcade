@@ -21,19 +21,15 @@ import { CanvasWidget, type ArrowKey } from './types';
  * ones there are - drawn from what main says the arrows will actually do, so a desk that
  * turned the grab off is never taught a control that does nothing.
  *
- * A run ends at the line target or when the stack reaches the top, and the fall speeds up
- * with every line cleared, so it cannot settle into something that goes on all afternoon.
- * It plays itself until the pointer arrives, one-piece lookahead over every rotation and
- * column, scored the way the old Tetris solvers score it.
+ * A run ends one way: the stack reaches the top. There is no target to survive to, so the
+ * escalation is what has to end it - the fall gets quicker with every level and never
+ * stops getting quicker, until it is quicker than anybody can steer against. It plays
+ * itself until the pointer arrives, one-piece lookahead over every rotation and column,
+ * scored the way the old Tetris solvers score it.
  */
 
 const COLS = 10;
 const ROWS = 16;
-/**
- * Lines that win a run. Twelve is a minute or so of decent play - long enough to be a
- * game, short enough that the toy is not still there when you look up from the terminal.
- */
-const TARGET = 12;
 
 /** Layout, as fractions of the box's square. The well on the left, the panel beside it. */
 const CELL = 0.0525;
@@ -43,14 +39,33 @@ const PANEL_X = 0.63;
 const PANEL_W = 0.325;
 const NEXT_Y = 0.17;
 const NEXT_CELL = 0.036;
-const COUNT_Y = 0.53;
-const BAR_Y = 0.68;
+const COUNT_Y = 0.5;
+const LEVEL_Y = 0.62;
+const BAR_Y = 0.71;
 const BAR_H = 0.022;
 
-/** Seconds per row at the start, shaved by each line cleared, down to the floor. */
+/**
+ * Seconds per row on level one, and the fraction of that a level takes off.
+ *
+ * No floor under it, on purpose. Every other number here could be tuned; this one is what
+ * makes the game end at all, and a floor is a difficulty the run can settle at - which
+ * against an autopilot that places pieces better than either of us means a widget still on
+ * screen when you look up an hour later. Gravity moves at most one row a frame, so the
+ * frame rate is the only floor there is, and reaching it is the ending.
+ */
 const FALL_START = 0.42;
-const FALL_STEP = 0.022;
-const FALL_MIN = 0.11;
+const FALL_DECAY = 0.84;
+/**
+ * What buys a level: this many seconds of play, or this many lines. They add rather than
+ * race, so a good run climbs on both counts.
+ *
+ * Lines alone is the rule everyone else uses and on its own it is the rule that lets this
+ * go on all afternoon: a stack kept flat and never cleared never speeds up, which is
+ * precisely what the autopilot does when nobody is here. The clock is what guarantees the
+ * ending; the lines are what make playing well cost something.
+ */
+const LEVEL_SECONDS = 5;
+const LEVEL_LINES = 3;
 /** Seconds per row while the button is held down, and while the autopilot is lined up. */
 const SOFT_INTERVAL = 0.04;
 /**
@@ -163,7 +178,6 @@ export const ROTATIONS: Cell[][][] = PIECES.map((piece) => {
 const KICKS = [0, -1, 1, -2, 2];
 
 type Phase = 'play' | 'clearing' | 'over';
-type Result = 'win' | 'loss' | null;
 /** Whichever input was used last is in charge, and it opens on autopilot. */
 type Mode = 'auto' | 'pointer' | 'keys';
 
@@ -185,9 +199,10 @@ export class Tetris extends CanvasWidget {
   private clearing: number[] = [];
   private clearTimer = 0;
   private lines = 0;
+  /** Seconds of play behind this run, which is half of what sets the speed. */
+  private elapsed = 0;
   private overTimer = 0;
   private phase: Phase = 'play';
-  private result: Result = null;
   private mode: Mode = 'auto';
   private pointerX: number | null = null;
   private pressed = false;
@@ -207,8 +222,8 @@ export class Tetris extends CanvasWidget {
     this.board = new Array<number>(COLS * ROWS).fill(-1);
     this.bag = [];
     this.lines = 0;
+    this.elapsed = 0;
     this.phase = 'play';
-    this.result = null;
     this.mode = 'auto';
     this.pointerX = null;
     this.pressed = false;
@@ -248,10 +263,10 @@ export class Tetris extends CanvasWidget {
     this.fallTimer = 0;
     this.lockTimer = LOCK_DELAY;
     this.stepTimer = 0;
-    // No room for the piece it is holding is the only way to lose, and there is nothing
+    // No room for the piece it is holding is the only way this ends, and there is nothing
     // to play out afterwards - the well is full at the point it is full.
     if (this.hits(this.rot, this.col, this.row)) {
-      this.over('loss');
+      this.over();
       return;
     }
     this.plan = this.mode === 'auto' ? this.bestPlacement() : null;
@@ -268,13 +283,33 @@ export class Tetris extends CanvasWidget {
     return false;
   }
 
+  /**
+   * How hard the game is leaning on you, as a number whose whole part is the level.
+   *
+   * Kept as one continuous quantity rather than a counter that gets bumped, because the
+   * panel wants the fraction as much as the level does: a bar filling towards the next
+   * step is the only warning the player gets that the floor is about to move.
+   */
+  private get pressure(): number {
+    return this.elapsed / LEVEL_SECONDS + this.lines / LEVEL_LINES;
+  }
+
+  private get level(): number {
+    return Math.floor(this.pressure);
+  }
+
   private interval(): number {
-    if (this.softUntil > 0) return SOFT_INTERVAL;
-    if (this.pressed && this.pressT >= TAP_SECONDS) return SOFT_INTERVAL;
-    if (this.plan && this.plan.rot === this.rot && this.plan.col === this.col) {
-      return SOFT_INTERVAL;
-    }
-    return Math.max(FALL_MIN, FALL_START - this.lines * FALL_STEP);
+    // Stepped by level rather than eased with pressure: a speed that drifts is a speed
+    // nobody notices changing, and the point of the escalation is to be felt.
+    const fall = FALL_START * Math.pow(FALL_DECAY, this.level);
+    // The lesser of the two, not SOFT_INTERVAL flat: a dozen levels in, the ordinary fall
+    // is already quicker than a soft drop, and a drop key that slowed the piece down would
+    // read as a stuck button.
+    const soft = Math.min(SOFT_INTERVAL, fall);
+    if (this.softUntil > 0) return soft;
+    if (this.pressed && this.pressT >= TAP_SECONDS) return soft;
+    if (this.plan && this.plan.rot === this.rot && this.plan.col === this.col) return soft;
+    return fall;
   }
 
   protected update(dt: number): void {
@@ -282,6 +317,11 @@ export class Tetris extends CanvasWidget {
     if (this.softUntil > 0) this.softUntil = Math.max(0, this.softUntil - dt);
     // Runs through every phase, so a legend is never left frozen on a finished board.
     if (this.guide > 0) this.guide = Math.max(0, this.guide - dt);
+
+    // Counted through a clear as well as through play, since a row still coming down is
+    // still the run, and stopped at the ending so a finished board does not go on levelling
+    // up in front of you.
+    if (this.phase !== 'over') this.elapsed += dt;
 
     if (this.phase === 'over') {
       this.overTimer += dt;
@@ -408,16 +448,11 @@ export class Tetris extends CanvasWidget {
     this.lines += this.clearing.length;
     this.clearing = [];
     this.phase = 'play';
-    if (this.lines >= TARGET) {
-      this.over('win');
-      return;
-    }
     this.spawn();
   }
 
-  private over(result: Exclude<Result, null>): void {
+  private over(): void {
     this.phase = 'over';
-    this.result = result;
     this.overTimer = 0;
   }
 
@@ -688,18 +723,23 @@ export class Tetris extends CanvasWidget {
     ctx.fillStyle = 'rgba(226,232,240,0.92)';
     ctx.font = `600 ${Math.round(this.size * 0.085)}px system-ui, sans-serif`;
     ctx.fillText(String(this.lines), centre, this.fy(COUNT_Y));
+
+    ctx.fillStyle = 'rgba(148,163,184,0.9)';
+    ctx.font = `${Math.round(this.size * 0.045)}px system-ui, sans-serif`;
+    ctx.fillText(`level ${this.level + 1}`, centre, this.fy(LEVEL_Y));
     ctx.restore();
 
-    // How much of the target is banked. A bar rather than pips: twelve pips at this size
-    // are a texture, not a count.
+    // How near the next level is. With no target to count towards, this bar is the only
+    // thing on screen that says the game is about to get harder, which is worth more
+    // warning than the speed change itself gives you.
     const w = PANEL_W * this.size * 0.8;
     const h = BAR_H * this.size;
     const x = centre - w / 2;
     const y = this.fy(BAR_Y);
     ctx.fillStyle = 'rgba(148,163,184,0.25)';
     ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = 'rgba(134,239,172,0.9)';
-    ctx.fillRect(x, y, (w * Math.min(this.lines, TARGET)) / TARGET, h);
+    ctx.fillStyle = 'rgba(251,146,60,0.9)';
+    ctx.fillRect(x, y, w * (this.pressure - this.level), h);
   }
 
   /**
@@ -754,9 +794,11 @@ export class Tetris extends CanvasWidget {
     ctx.shadowBlur = 8;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // The count is the ending; the colour says whether it was enough. Anything more would
-    // be a word covering the board you want to look at.
-    ctx.fillStyle = this.result === 'win' ? 'rgba(134,239,172,0.95)' : 'rgba(248,113,113,0.95)';
+    // The count is the ending, and with only one way to end there is nothing for a colour
+    // to say about it - every run finishes topped out, so red would be scolding the player
+    // for playing. It is a score, drawn as one, and anything wordier would cover the board
+    // you want a last look at.
+    ctx.fillStyle = 'rgba(226,232,240,0.95)';
     ctx.font = `600 ${Math.round(this.size * 0.075)}px system-ui, sans-serif`;
     ctx.fillText(
       `${this.lines} lines`,

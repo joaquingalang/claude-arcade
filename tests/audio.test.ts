@@ -735,6 +735,78 @@ describe('buzz wire rasp', () => {
     expect(env[3]!.value).toBeLessThan(env[1]!.value);
   });
 
+  /**
+   * The other ending a course has, and it has to be the opposite sound.
+   *
+   * A low sustained rattle and three bright notes that are over in half a second: the two
+   * are told apart from across a room, which is the only place either of them is heard.
+   */
+  it('chimes a rising triad on the far post', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.chime();
+
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(3);
+    const pitches = ctx.oscillators.map((osc) => osc.frequency.value);
+    for (const [i, hz] of pitches.entries()) {
+      expect(ctx.oscillators[i]!.type).toBe('triangle');
+      // Nothing before it, so the figure rises however the notes were ordered in source.
+      if (i > 0) expect(hz).toBeGreaterThan(pitches[i - 1]!);
+    }
+    // No filter: a triangle is nearly all fundamental, so there is nothing to roll off.
+    expect(ctx.filters).toHaveLength(0);
+  });
+
+  /** Struck and left to ring, where the buzz is held - that is the difference, in the envelope. */
+  it('lets each chime note decay instead of holding it', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.chime();
+
+    for (const gain of FakeAudioContext.last!.gains) {
+      const env = gain.gain.events;
+      expect(env.map((e) => e.kind)).toEqual(['set', 'exp', 'exp']);
+      for (const e of env) expect(e.value).toBeGreaterThan(0);
+      expect(env[2]!.value).toBeLessThan(env[1]!.value);
+    }
+  });
+
+  /** Three notes 85ms apart are a figure; three notes fired on frames are a stumble. */
+  it('spaces the chime on the audio clock rather than note by note', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+    rasp.chime();
+
+    const starts = FakeAudioContext.last!.gains.map((gain) => gain.gain.events[0]!.at);
+    for (let i = 1; i < starts.length; i++) expect(starts[i]!).toBeGreaterThan(starts[i - 1]!);
+  });
+
+  /**
+   * One voice for the whole figure.
+   *
+   * Counting the notes apart would be worse here than for the buzz: the cap is two, so the
+   * chime would swallow its own second and third notes.
+   */
+  it('counts a chime as one voice, and frees it when the last note ends', async () => {
+    const { rasp, setSoundEnabled } = await loadAudio();
+    setSoundEnabled(true);
+
+    for (let i = 0; i < 10; i++) rasp.chime();
+    const ctx = FakeAudioContext.last!;
+    expect(ctx.oscillators).toHaveLength(6);
+
+    for (const osc of [...ctx.oscillators]) osc.end();
+    rasp.chime();
+    expect(ctx.oscillators).toHaveLength(9);
+  });
+
+  it('is silent while sound is off, chime and all', async () => {
+    const { rasp } = await loadAudio();
+    rasp.chime();
+    expect(FakeAudioContext.built).toBe(0);
+  });
+
   /** The pair is one voice. Counting them apart would halve a cap that is already small. */
   it('counts a buzz as one voice, and frees it when the pair ends', async () => {
     const { rasp, setSoundEnabled } = await loadAudio();

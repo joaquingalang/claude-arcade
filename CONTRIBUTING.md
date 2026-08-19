@@ -35,7 +35,7 @@ npm run build                # shared + cli (tsc) and app (vite + tsc)
 ARCADE_DEBUG=1 npm run app   # just the Electron app, renderer logs to stderr
 ```
 
-`npm test` currently runs 415 tests across 10 files in about three seconds. Keep it that
+`npm test` currently runs 436 tests across 10 files in about three seconds. Keep it that
 fast; these tests are meant to be run constantly, so nothing in `tests/` should sleep, bind
 a port, or launch Electron.
 
@@ -108,8 +108,8 @@ indefinitely at a fixed difficulty is a game that will.
 swap; `setHold(false)` releases it. The Tower of Hanoi is the widget it exists for: pick a
 disc up and the cycle waits until the tower is standing complete again, because being
 moved along three moves from the end of a puzzle is the same insult `finish()` protects a
-game from. The buzz wire is the second, and holds until the ring reaches the far post.
-Three rules come with it, and there are tests for each:
+game from. The buzz wire is the second, and holds until the ring reaches the far post or
+the run's three lives are spent. Three rules come with it, and there are tests for each:
 
 - **Never hold while nobody is touching it.** A widget that holds on its own has simply
   appointed itself a game, and every toy in `toys` is checked for this.

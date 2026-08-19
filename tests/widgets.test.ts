@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buzzer, knock, pops, rasp } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
-import { BuzzWire } from '../packages/app/src/renderer/widgets/buzz-wire';
+import { BuzzWire, LEVELS } from '../packages/app/src/renderer/widgets/buzz-wire';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import {
   COLORWAYS,
@@ -1400,19 +1400,27 @@ describe('ThumbPiano', () => {
   });
 });
 
+/** Kept in step with the lives and the layout in buzz-wire.ts. */
+const BUZZ_LIVES_HINT = 3;
+/** The furthest off centre any course may swing: BEND * the hardest grade's swing. */
+const BUZZ_SWING_HINT = 0.19 * 1.3;
+
 interface BuzzInternals {
   wire: Array<{ x: number; y: number }>;
   length: number;
   pos: number;
   offset: number;
   dir: 1 | -1;
-  phase: 'run' | 'buzz' | 'arrived';
+  level: number;
+  lives: number;
+  phase: 'run' | 'buzz' | 'failed' | 'arrived';
   lamp: 'off' | 'good' | 'bad';
   wait: number;
   dragging: boolean;
   engaged: boolean;
   /** The tolerance in pixels, read rather than recomputed so the test cannot drift off it. */
   touch: number;
+  bendWire(): void;
   sample(at: number): { x: number; y: number; nx: number; ny: number };
   ringCentre(): { x: number; y: number };
 }
@@ -1457,6 +1465,130 @@ describe('BuzzWire', () => {
     expect(moved).toBe(true);
     // Close enough that the near miss reads as one, which is the point of the wobble.
     expect(nearest).toBeGreaterThan(st.touch * 0.25);
+    w.stop();
+  });
+
+  /**
+   * The ladder, run end to end with nobody watching.
+   *
+   * The autopilot weaves inside the tolerance, and the tolerance is what a grade changes -
+   * so a wobble sized for a gentle easy course is a wobble that grounds itself out on a
+   * hard one, and every rung has to be checked rather than whichever two the dice served
+   * up in the sweep above.
+   */
+  it('runs every course on the ladder without grounding itself out', () => {
+    const { w, st } = start();
+    for (let rung = 0; rung < LEVELS.length; rung++) {
+      st.level = rung;
+      st.bendWire();
+      st.pos = 0;
+      st.dir = 1;
+      st.phase = 'run';
+
+      let frames = 0;
+      while (st.phase === 'run' && frames < 900) {
+        pump(1);
+        frames++;
+        expect(strayed(st)).toBeLessThan(st.touch);
+      }
+      // It got to the far post rather than running out of frames on the way.
+      expect(st.phase).toBe('arrived');
+    }
+    w.stop();
+  });
+
+  /**
+   * Every shape, every grade, and twenty throws of the dice at each - a course is bent
+   * fresh each time, so a shape that only sometimes overshoots the box would otherwise be
+   * a bug that turns up on somebody's desk and nowhere else.
+   */
+  it('keeps every course on the ladder inside the box', () => {
+    const { w, st } = start();
+    for (let rung = 0; rung < LEVELS.length; rung++) {
+      st.level = rung;
+      for (let throw_ = 0; throw_ < 20; throw_++) {
+        st.bendWire();
+        for (const point of st.wire) {
+          expect(Math.abs(point.y - SIZE / 2)).toBeLessThanOrEqual(BUZZ_SWING_HINT * SIZE);
+          expect(point.x).toBeGreaterThanOrEqual(0);
+          expect(point.x).toBeLessThanOrEqual(SIZE);
+        }
+      }
+    }
+    w.stop();
+  });
+
+  /** A buzz wire you have learnt by heart is a picture, so no two courses are the same. */
+  it('bends a fresh course every time, even on the same rung', () => {
+    const { w, st } = start();
+    st.level = 0;
+    const shapes = new Set<string>();
+    for (let throw_ = 0; throw_ < 12; throw_++) {
+      st.bendWire();
+      shapes.add(st.wire.map((point) => point.y.toFixed(1)).join(','));
+    }
+    expect(shapes.size).toBe(12);
+    w.stop();
+  });
+
+  /**
+   * The grades cycle rather than climb.
+   *
+   * A ladder that only got harder would spend its last rungs unplayable and its first ones
+   * dull, and the toy is on screen fifteen seconds at a stretch - whoever picks the ring up
+   * joins wherever the demo got to, so every rung has to be worth arriving on.
+   */
+  it('cycles easy, medium and hard rather than climbing to a wall', () => {
+    expect(LEVELS).toHaveLength(12);
+    for (const [rung, level] of LEVELS.entries()) {
+      expect(level.difficulty).toBe((['easy', 'medium', 'hard'] as const)[rung % 3]);
+    }
+    // Every shape met at more than one grade, or a pattern would only ever be seen easy.
+    for (const pattern of new Set(LEVELS.map((level) => level.pattern))) {
+      const grades = LEVELS.filter((level) => level.pattern === pattern);
+      expect(new Set(grades.map((level) => level.difficulty)).size).toBeGreaterThan(1);
+    }
+  });
+
+  /** A harder grade is a tighter ring, which is the tolerance and the picture of it at once. */
+  it('holds the ring to less room on a harder grade', () => {
+    const { w, st } = start();
+    const room = LEVELS.map((_level, rung) => {
+      st.level = rung;
+      return st.touch;
+    });
+
+    for (let rung = 0; rung < LEVELS.length; rung++) {
+      if (LEVELS[rung]!.difficulty !== 'hard') continue;
+      const easier = room.filter((_r, i) => LEVELS[i]!.difficulty === 'easy');
+      for (const other of easier) expect(room[rung]!).toBeLessThan(other);
+    }
+    w.stop();
+  });
+
+  /**
+   * The next rung is laid while the ring rests on the post it arrived at, which is the
+   * only moment a course may be replaced: both ends of every course are the same two
+   * posts, so a ring sitting on one is still threaded on whatever comes next.
+   */
+  it('lays the next course when the ring reaches a post, and wraps at the top', () => {
+    const { w, st } = start();
+    expect(st.level).toBe(0);
+
+    st.pos = st.length;
+    st.phase = 'arrived';
+    st.timer = 0.001;
+    pump(1);
+    expect(st.level).toBe(1);
+    expect(st.pos).toBe(st.length);
+    expect(st.dir).toBe(-1);
+
+    st.level = LEVELS.length - 1;
+    st.pos = 0;
+    st.phase = 'arrived';
+    st.timer = 0.001;
+    pump(1);
+    expect(st.level).toBe(0);
     w.stop();
   });
 
@@ -1553,6 +1685,48 @@ describe('BuzzWire', () => {
     w.stop();
   });
 
+  /**
+   * A finished course chimes, and only for the hand that finished it.
+   *
+   * The autopilot reaches the far post every few seconds all day; a chime there would be
+   * the toy congratulating itself at somebody trying to work.
+   */
+  it('chimes when a player finishes a course, and not when the autopilot does', () => {
+    const chime = vi.spyOn(rasp, 'chime').mockImplementation(() => {});
+    const { w, st } = start();
+
+    pump(900); // fifteen seconds, two courses and a bit, all of it unattended
+    expect(chime).not.toHaveBeenCalled();
+
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    st.pos = st.length * 0.95;
+    const post = st.wire[st.wire.length - 1]!;
+    w.onPointerMove(post.x, post.y);
+
+    expect(st.phase).toBe('arrived');
+    expect(chime).toHaveBeenCalledTimes(1);
+    w.stop();
+    chime.mockRestore();
+  });
+
+  /** The two endings sound different, which is the whole reason there are two sounds. */
+  it('does not chime for a course that ended on the wire', () => {
+    const chime = vi.spyOn(rasp, 'chime').mockImplementation(() => {});
+    const buzz = vi.spyOn(rasp, 'buzz').mockImplementation(() => {});
+    const { w, st } = start();
+
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+
+    expect(buzz).toHaveBeenCalledTimes(1);
+    expect(chime).not.toHaveBeenCalled();
+    w.stop();
+    chime.mockRestore();
+    buzz.mockRestore();
+  });
+
   it('rasps on contact, and stays quiet through a clean run', () => {
     const buzz = vi.spyOn(rasp, 'buzz').mockImplementation(() => {});
     const { w, st } = start();
@@ -1566,6 +1740,89 @@ describe('BuzzWire', () => {
     expect(buzz).toHaveBeenCalledTimes(1);
     w.stop();
     buzz.mockRestore();
+  });
+
+  /**
+   * Three lives, and only a hand can spend one - the autopilot never touches the wire, so
+   * a toy left alone can never work its own run into a game over.
+   */
+  it('gives the player three lives, one per touch', () => {
+    const { w, st } = start();
+    expect(st.lives).toBe(BUZZ_LIVES_HINT);
+
+    pump(600); // ten seconds of autopilot, courses and all
+    expect(st.lives).toBe(BUZZ_LIVES_HINT);
+
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+    expect(st.lives).toBe(BUZZ_LIVES_HINT - 1);
+    expect(st.phase).toBe('buzz');
+    w.stop();
+  });
+
+  /** Spend the lot and the run is over: back to the first rung with a fresh three. */
+  it('ends the run on the last life, and starts the ladder again', () => {
+    const { w, st } = start();
+    st.level = 4;
+    st.bendWire();
+
+    for (let life = 0; life < BUZZ_LIVES_HINT; life++) {
+      pump(60); // past whichever beat the last touch left it in
+      const ring = st.ringCentre();
+      w.onPointerDown(ring.x, ring.y);
+      w.onPointerMove(ring.x, ring.y - SIZE * 3);
+    }
+
+    expect(st.lives).toBe(0);
+    expect(st.phase).toBe('failed');
+    expect(st.lamp).toBe('bad');
+
+    pump(120); // past the ending it is held for
+    expect(st.phase).toBe('run');
+    expect(st.level).toBe(0);
+    expect(st.lives).toBe(BUZZ_LIVES_HINT);
+    expect(st.pos).toBe(0);
+    w.stop();
+  });
+
+  /** The run ends there, so the cycle stops waiting for it there. */
+  it('lets the cycle go when the last life goes', () => {
+    const { w, onHold, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    expect(onHold).toHaveBeenLastCalledWith(true);
+    // Set after the grab, since reaching for a ring nobody was holding deals a fresh three.
+    st.lives = 1;
+
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+    expect(onHold).toHaveBeenLastCalledWith(false);
+    expect(st.engaged).toBe(false);
+    w.stop();
+  });
+
+  /**
+   * Lives belong to the run rather than to the toy. The autopilot never spends one, and
+   * inheriting what the last person spent would be a punishment for arriving late.
+   */
+  it('gives a fresh hand a fresh three', () => {
+    const { w, st } = start();
+    const ring = st.ringCentre();
+    w.onPointerDown(ring.x, ring.y);
+    w.onPointerMove(ring.x, ring.y - SIZE * 3);
+    expect(st.lives).toBe(BUZZ_LIVES_HINT - 1);
+
+    // Reaching again while the run is still theirs keeps the lives they have left.
+    pump(60);
+    w.onPointerDown(0, 0);
+    expect(st.lives).toBe(BUZZ_LIVES_HINT - 1);
+
+    // Walked away from, and picked up by somebody else.
+    w.onPointerUp(0, 0);
+    pump(1000); // past the abandon mark
+    w.onPointerDown(0, 0);
+    expect(st.lives).toBe(BUZZ_LIVES_HINT);
+    w.stop();
   });
 
   it('sends the ring back to the start of the course after a buzz', () => {
@@ -2486,10 +2743,11 @@ describe('SpaceInvaders', () => {
   });
 });
 
-/** Kept in step with the well and the target in tetris.ts. */
+/** Kept in step with the well and the level rule in tetris.ts. */
 const TETRIS_COLS_HINT = 10;
 const TETRIS_ROWS_HINT = 16;
-const TETRIS_TARGET_HINT = 12;
+const TETRIS_LEVEL_SECONDS_HINT = 5;
+const TETRIS_LEVEL_LINES_HINT = 3;
 
 interface TetrisInternals {
   board: number[];
@@ -2498,11 +2756,11 @@ interface TetrisInternals {
   col: number;
   row: number;
   lines: number;
+  elapsed: number;
   clearing: number[];
   clearTimer: number;
   fallTimer: number;
   phase: 'play' | 'clearing' | 'over';
-  result: 'win' | 'loss' | null;
   mode: 'auto' | 'pointer' | 'keys';
   plan: { rot: number; col: number } | null;
   pointerX: number | null;
@@ -2510,6 +2768,7 @@ interface TetrisInternals {
   guide: number;
   cell: number;
   originX: number;
+  interval(): number;
 }
 
 describe('Tetris', () => {
@@ -2549,13 +2808,20 @@ describe('Tetris', () => {
     return count;
   };
 
-  /** Frames a piece takes to fall one row, over an empty well with no button held. */
-  const fallFrames = (st: TetrisInternals): number => {
+  /**
+   * Frames a piece takes to fall one row, over an empty well with no button held.
+   *
+   * The clock feed is pinned for the measurement rather than left running: the level
+   * climbs on its own, so an unpinned "before" and "after" would come out different even
+   * with nothing else changed, and the test would pass without meaning anything.
+   */
+  const fallFrames = (st: TetrisInternals, elapsed = 0): number => {
     st.board.fill(-1);
     st.row = 0;
     st.fallTimer = 0;
     let frames = 0;
-    while (st.row === 0 && frames < 200) {
+    while (st.row === 0 && frames < 400) {
+      st.elapsed = elapsed;
       pump(1);
       frames++;
     }
@@ -2679,13 +2945,63 @@ describe('Tetris', () => {
     held.stop();
   });
 
-  it('speeds up as the lines go in, so it cannot settle at one pace', () => {
+  it('speeds up as the lines go in', () => {
     const { w, st } = start();
     w.onPointerMove(overColumn(st, 4), SIZE / 2);
     const early = fallFrames(st);
 
-    st.lines = TETRIS_TARGET_HINT - 1;
+    st.lines = TETRIS_LEVEL_LINES_HINT * 4;
     expect(fallFrames(st)).toBeLessThan(early);
+    w.stop();
+  });
+
+  /**
+   * And on the clock alone, which is the half that guarantees an ending.
+   *
+   * Lines alone is the classic rule and it is the one that would let this go on all
+   * afternoon: a stack kept flat and never cleared never speeds up, which is exactly how
+   * the autopilot plays when nobody is here.
+   */
+  it('speeds up on the clock even when no line ever goes in', () => {
+    const { w, st } = start();
+    w.onPointerMove(overColumn(st, 4), SIZE / 2);
+    const early = fallFrames(st);
+
+    expect(st.lines).toBe(0);
+    expect(fallFrames(st, TETRIS_LEVEL_SECONDS_HINT * 4)).toBeLessThan(early);
+    w.stop();
+  });
+
+  /**
+   * There is no floor under the fall, and that is the load-bearing part of the escalation.
+   *
+   * A floor is a difficulty the run can settle at, and a run that settles is a widget
+   * still on screen when you look up an hour later - the autopilot places pieces better
+   * than the ending is hard, and would happily hold a flat stack at any speed it can
+   * steer against.
+   */
+  it('keeps getting quicker with no pace it settles at', () => {
+    const { w, st } = start();
+    w.onPointerMove(overColumn(st, 4), SIZE / 2);
+
+    // One row a frame is the only floor there is: gravity never takes two rows in one
+    // frame, so arriving there is the ending rather than a plateau.
+    expect(fallFrames(st, TETRIS_LEVEL_SECONDS_HINT * 20)).toBe(1);
+    expect(fallFrames(st, TETRIS_LEVEL_SECONDS_HINT * 40)).toBe(1);
+    w.stop();
+  });
+
+  /**
+   * A dozen levels in, the ordinary fall is quicker than a soft drop ever was, and a drop
+   * key that put the brakes on there would read as a stuck button.
+   */
+  it('never lets the drop key slow the piece down', () => {
+    const { w, st } = start(true);
+    st.elapsed = TETRIS_LEVEL_SECONDS_HINT * 20;
+    const falling = st.interval();
+
+    st.softUntil = 0.1;
+    expect(st.interval()).toBeLessThanOrEqual(falling);
     w.stop();
   });
 
@@ -2717,28 +3033,28 @@ describe('Tetris', () => {
     w.stop();
   });
 
-  it('wins at the line target, and hands over exactly once', () => {
+  /**
+   * Clearing lines banks a score and nothing else. No count wins, because a target is a
+   * way to get out from under the escalation, and the escalation is the game.
+   */
+  it('keeps going however many lines go in', () => {
     const { w, onDone, st } = start();
-    fillRow(st, TETRIS_ROWS_HINT - 1);
-    st.lines = TETRIS_TARGET_HINT - 1;
-    st.clearing = [TETRIS_ROWS_HINT - 1];
-    st.clearTimer = 0.001;
-    st.phase = 'clearing';
+    for (let round = 0; round < 20; round++) {
+      fillRow(st, TETRIS_ROWS_HINT - 1);
+      st.clearing = [TETRIS_ROWS_HINT - 1];
+      st.clearTimer = 0.001;
+      st.phase = 'clearing';
+      pump(1);
+    }
 
-    pump(1);
-    expect(st.lines).toBe(TETRIS_TARGET_HINT);
-    expect(st.result).toBe('win');
+    expect(st.lines).toBe(20);
+    expect(st.phase).not.toBe('over');
     expect(onDone).not.toHaveBeenCalled();
-
-    pump(150); // past the result pause
-    expect(onDone).toHaveBeenCalledTimes(1);
-    pump(150);
-    expect(onDone).toHaveBeenCalledTimes(1);
     w.stop();
   });
 
-  /** No room for the piece it is holding is the only way to lose, and it ends there. */
-  it('ends the run when the stack reaches the top', () => {
+  /** No room for the piece it is holding is the one way a run ends, and it ends there. */
+  it('ends the run when the stack reaches the top, and hands over exactly once', () => {
     const { w, onDone, st } = start();
     // Every cell but one column: the well is full to the top without a row being full,
     // which would otherwise clear the board out from under the test.
@@ -2748,10 +3064,25 @@ describe('Tetris', () => {
 
     pump(60);
     expect(st.phase).toBe('over');
-    expect(st.result).toBe('loss');
+    expect(onDone).not.toHaveBeenCalled();
 
     pump(150); // past the result pause
     expect(onDone).toHaveBeenCalledTimes(1);
+    pump(150);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  /** With no target to count towards, the level is what the panel has to say instead. */
+  it('says what level it is on', () => {
+    const { w, ctx, st } = start();
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('level 1');
+
+    st.elapsed = TETRIS_LEVEL_SECONDS_HINT * 3;
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('level 4');
     w.stop();
   });
 
@@ -2936,14 +3267,22 @@ describe('Tetris', () => {
     expect(st.guide).toBeLessThan(before);
     w.stop();
   });
-  /** Games are exempt from the cycle clock, so one that never ends holds the screen. */
+  /**
+   * Games are exempt from the cycle clock, so one that never ends holds the screen.
+   *
+   * This is the test the escalation exists for. The autopilot plays better than the
+   * ending is hard, and the only thing that beats it is the fall outrunning the steering -
+   * over 20 sampled runs that lands between 57 and 88 seconds, so the budget here is
+   * generous rather than tight.
+   */
   it('reaches an ending on its own, left alone', () => {
     const { w, onDone, st } = start();
     for (let f = 0; f < 12000 && onDone.mock.calls.length === 0; f++) pump(1);
 
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(st.phase).toBe('over');
-    expect(st.result).not.toBeNull();
+    // Long enough to have been a game, rather than a well that filled in its first breath.
+    expect(st.lines).toBeGreaterThan(5);
     w.stop();
   });
 });
