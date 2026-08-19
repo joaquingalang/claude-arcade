@@ -26,6 +26,8 @@ export class WidgetWindow {
     private readonly onPositionChanged: (pos: { x: number; y: number }) => void,
     /** Read per show, not captured once, so a config edit lands on the next appearance. */
     private readonly isSoundEnabled: () => boolean = () => false,
+    /** Whether this widget will actually get the arrow keys. Read per show, as above. */
+    private readonly hasKeyboard: (widgetId: string) => boolean = () => false,
   ) {}
 
   /**
@@ -126,6 +128,7 @@ export class WidgetWindow {
       generation,
       ...this.bounds,
       soundEnabled: this.isSoundEnabled(),
+      keyboard: this.hasKeyboard(widgetId),
     });
   }
 

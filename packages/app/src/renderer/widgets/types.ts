@@ -7,6 +7,15 @@ export interface WidgetOptions {
   /** CSS pixel height of the canvas. Rendering must stay inside this box. */
   height: number;
   /**
+   * Whether the arrow keys will actually reach this widget.
+   *
+   * Only two widgets ask for keys and the user can switch the grab off entirely, so a
+   * widget that draws its own controls has to be told rather than assume. Defaults to
+   * false: a widget built against this must be honest in the harness and the tests, where
+   * there is no main process to ask.
+   */
+  keyboard?: boolean;
+  /**
    * Called once when a self-paced widget's run is over.
    *
    * The fidget toys never call it - they have no end, so the clock decides when they hand
@@ -57,6 +66,8 @@ export abstract class CanvasWidget implements Widget {
    * tall - should reach for `width`/`height` directly.
    */
   protected size = 0;
+  /** Whether `onKey` will ever be called - see `WidgetOptions.keyboard`. */
+  protected keyboard = false;
   private raf: number | null = null;
   private lastTime = 0;
   private done: (() => void) | undefined;
@@ -71,6 +82,7 @@ export abstract class CanvasWidget implements Widget {
     this.width = opts.width;
     this.height = opts.height;
     this.size = Math.min(opts.width, opts.height);
+    this.keyboard = opts.keyboard ?? false;
     this.done = opts.onDone;
     this.holdCycle = opts.onHold;
     this.finished = false;

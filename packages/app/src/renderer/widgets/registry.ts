@@ -1,4 +1,5 @@
 import { BubbleWrap } from './bubble-wrap';
+import { BuzzWire } from './buzz-wire';
 import { FallingSand } from './falling-sand';
 import { FidgetSpinner } from './fidget-spinner';
 import { FlappyBird } from './flappy-bird';
@@ -8,6 +9,7 @@ import { Simon } from './simon';
 import { Snake } from './snake';
 import { SpaceInvaders } from './space-invaders';
 import { Suika } from './suika';
+import { Tetris } from './tetris';
 import { ThumbPiano } from './thumb-piano';
 import { TowerOfHanoi } from './tower-of-hanoi';
 import type { CanvasWidget } from './types';
@@ -26,12 +28,14 @@ export const WIDGET_REGISTRY: Record<string, { label: string; create: () => Canv
   'falling-sand': { label: 'Falling Sand', create: () => new FallingSand() },
   'tower-of-hanoi': { label: 'Tower of Hanoi', create: () => new TowerOfHanoi() },
   'thumb-piano': { label: 'Thumb Piano', create: () => new ThumbPiano() },
+  'buzz-wire': { label: 'Buzz Wire', create: () => new BuzzWire() },
   snake: { label: 'Snake', create: () => new Snake() },
   'flappy-bird': { label: 'Flappy Bird', create: () => new FlappyBird() },
   pong: { label: 'Pong', create: () => new Pong() },
   simon: { label: 'Simon', create: () => new Simon() },
   suika: { label: 'Suika', create: () => new Suika() },
   'space-invaders': { label: 'Space Invaders', create: () => new SpaceInvaders() },
+  tetris: { label: 'Tetris', create: () => new Tetris() },
 };
 
 export function createWidget(id: string): CanvasWidget {

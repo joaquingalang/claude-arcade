@@ -14,7 +14,15 @@ interface ArcadeState {
   width: number;
   height: number;
   visible: boolean;
-  setWidget(id: string, generation: number, width: number, height: number): void;
+  /** Whether the arrow keys reach this widget, so it can say so on screen. */
+  keyboard: boolean;
+  setWidget(
+    id: string,
+    generation: number,
+    width: number,
+    height: number,
+    keyboard: boolean,
+  ): void;
   hide(): void;
 }
 
@@ -24,8 +32,9 @@ export const useArcadeStore = create<ArcadeState>((set) => ({
   width: DEFAULT_SIZE,
   height: DEFAULT_SIZE,
   visible: false,
+  keyboard: false,
   // A show always names the widget and its box, so the facts update together.
-  setWidget: (id, generation, width, height) =>
-    set({ widgetId: id, generation, width, height, visible: true }),
+  setWidget: (id, generation, width, height, keyboard) =>
+    set({ widgetId: id, generation, width, height, keyboard, visible: true }),
   hide: () => set({ visible: false }),
 }));

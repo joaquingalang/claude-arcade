@@ -1,9 +1,11 @@
 import { setSoundEnabled } from './audio';
 import { WIDGET_REGISTRY, createWidget } from './widgets/registry';
-import type { CanvasWidget } from './widgets/types';
+import type { ArrowKey, CanvasWidget } from './widgets/types';
 
 const SIZE = 280;
 const live = new Map<string, CanvasWidget>();
+/** The widget the pointer is over, which is the one the arrow keys mean. */
+let focused: CanvasWidget | null = null;
 
 const params = new URLSearchParams(location.search);
 const only = params.get('only');
@@ -36,6 +38,9 @@ for (const [id, entry] of Object.entries(WIDGET_REGISTRY)) {
   widget.start(ctx, {
     width,
     height: SIZE,
+    // True here and only here: this page has focus of its own, so the arrows really do
+    // reach a widget - no global accelerator, and no config to have switched off.
+    keyboard: true,
     onDone: () => {
       caption.textContent = `${entry.label} - done`;
     },
@@ -64,7 +69,33 @@ for (const [id, entry] of Object.entries(WIDGET_REGISTRY)) {
     const p = at(e);
     widget.onPointerUp(p.x, p.y);
   });
+  canvas.addEventListener('pointerenter', () => {
+    focused = widget;
+  });
 }
+
+/**
+ * Arrow keys for whichever widget the pointer is over.
+ *
+ * In the app the arrows come from a global accelerator and only one widget is on screen,
+ * so there is nothing to choose between. Here a dozen are up at once, and hovering is the
+ * one gesture that already means "this one". Without this the keyboard half of Snake and
+ * Tetris could only be tried by launching Electron.
+ */
+const ARROWS: Record<string, ArrowKey> = {
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+};
+
+window.addEventListener('keydown', (e) => {
+  const key = ARROWS[e.key];
+  if (!key || !focused) return;
+  // Or the page scrolls out from under the widget being played.
+  e.preventDefault();
+  focused.onKey(key);
+});
 
 // Poked from the console to drive a widget's internals while looking at it.
 (window as unknown as { widgets: Map<string, CanvasWidget> }).widgets = live;

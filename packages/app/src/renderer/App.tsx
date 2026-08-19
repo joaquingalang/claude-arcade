@@ -8,14 +8,15 @@ import { useArcadeStore } from './store';
 const GRIP_HEIGHT = 22;
 
 export function App() {
-  const { widgetId, generation, width, height, visible, setWidget, hide } = useArcadeStore();
+  const { widgetId, generation, width, height, visible, keyboard, setWidget, hide } =
+    useArcadeStore();
 
   useEffect(() => {
     window.arcade.onShow((p) => {
       // Applied before the widget mounts, so the samples are decoding while the first
       // bubble is still being drawn.
       setSoundEnabled(p.soundEnabled);
-      setWidget(p.widgetId, p.generation, p.width, p.height);
+      setWidget(p.widgetId, p.generation, p.width, p.height, p.keyboard);
     });
     window.arcade.onHide(() => {
       suspendSound();
@@ -61,6 +62,7 @@ export function App() {
         generation={generation}
         width={width}
         height={height}
+        keyboard={keyboard}
         paused={!visible}
       />
     </div>

@@ -9,12 +9,14 @@ interface Props {
   generation: number;
   width: number;
   height: number;
+  /** Whether the arrow keys reach this widget, passed on so it can say so on screen. */
+  keyboard: boolean;
   paused: boolean;
 }
 
 const ARROW_KEYS = new Set(['Up', 'Down', 'Left', 'Right']);
 
-export function WidgetCanvas({ widgetId, generation, width, height, paused }: Props) {
+export function WidgetCanvas({ widgetId, generation, width, height, keyboard, paused }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const widgetRef = useRef<CanvasWidget | null>(null);
   const draggingRef = useRef(false);
@@ -40,6 +42,7 @@ export function WidgetCanvas({ widgetId, generation, width, height, paused }: Pr
     widget.start(ctx, {
       width,
       height,
+      keyboard,
       // Main decides what happens next - rotate, or restart this same game in place.
       onDone: () => window.arcade.widgetDone(widgetId),
       // And whether to wait, when the widget says someone is midway through it.
@@ -57,7 +60,7 @@ export function WidgetCanvas({ widgetId, generation, width, height, paused }: Pr
     };
     // generation is in the deps on purpose: a finished game handing over to itself keeps
     // the same id, and without it React would keep the dead board mounted.
-  }, [widgetId, generation, width, height]);
+  }, [widgetId, generation, width, height, keyboard]);
 
   useEffect(() => {
     const widget = widgetRef.current;
