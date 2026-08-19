@@ -75,6 +75,14 @@ function checkBuildFreshness(repoRoot: string): string {
     }
   }
 
+  // The renderer is built by vite, which writes no .tsbuildinfo at all. Without this a
+  // widget edit would be dated against whenever main last compiled, and every rebuild
+  // after it would still read as stale - the bundle is the only record that it happened.
+  builtAt = Math.max(
+    builtAt,
+    newestMtime(path.join(repoRoot, 'packages', 'app', 'dist', 'renderer')),
+  );
+
   let newestSrc = 0;
   for (const pkg of ['shared', 'cli', 'app']) {
     newestSrc = Math.max(newestSrc, newestMtime(path.join(repoRoot, 'packages', pkg, 'src')));
