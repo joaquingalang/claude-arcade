@@ -31,6 +31,7 @@ export const GAME_IDS = [
   'suika',
   'space-invaders',
   'tetris',
+  'wordle',
 ] as const;
 
 export const WIDGET_IDS = [...TOY_IDS, ...GAME_IDS] as const;

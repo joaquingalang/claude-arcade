@@ -20,6 +20,7 @@ import { ROTATIONS, Tetris } from '../packages/app/src/renderer/widgets/tetris';
 import { ThumbPiano } from '../packages/app/src/renderer/widgets/thumb-piano';
 import { TowerOfHanoi } from '../packages/app/src/renderer/widgets/tower-of-hanoi';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
+import { type Mark, WORDS, Wordle, markGuess } from '../packages/app/src/renderer/widgets/wordle';
 
 const SIZE = 280;
 
@@ -60,6 +61,7 @@ function makeCtx() {
     rect: rec('rect'),
     clip: rec('clip'),
     fillRect: rec('fillRect'),
+    strokeRect: rec('strokeRect'),
     fillText: (t: string, ...args: unknown[]) => {
       calls.push('fillText');
       texts.push(String(t));
@@ -141,6 +143,7 @@ const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'Suika', make: () => new Suika() },
   { name: 'SpaceInvaders', make: () => new SpaceInvaders() },
   { name: 'Tetris', make: () => new Tetris() },
+  { name: 'Wordle', make: () => new Wordle() },
 ];
 
 describe.each(widgets)('$name', ({ make }) => {
@@ -3283,6 +3286,506 @@ describe('Tetris', () => {
     expect(st.phase).toBe('over');
     // Long enough to have been a game, rather than a well that filled in its first breath.
     expect(st.lines).toBeGreaterThan(5);
+    w.stop();
+  });
+});
+
+/**
+ * The marking rule, on its own, because it is the one piece of Wordle that is genuinely
+ * easy to get wrong and impossible to spot by eye once it is.
+ */
+describe('markGuess', () => {
+  it('greens a letter in the right place', () => {
+    expect(markGuess('CRANE', 'CRANE')).toEqual(['hit', 'hit', 'hit', 'hit', 'hit']);
+  });
+
+  it('yellows a letter that is in the word but not there', () => {
+    expect(markGuess('CRANE', 'NACRE')).toEqual(['near', 'near', 'near', 'near', 'hit']);
+  });
+
+  it('greys a letter the word does not have', () => {
+    expect(markGuess('MUDDY', 'CHAIR')).toEqual(['miss', 'miss', 'miss', 'miss', 'miss']);
+  });
+
+  /**
+   * The bug this whole two-pass business exists to avoid.
+   *
+   * ABBEY has two B's and BOBBY has three. The B that lands in the right place claims one,
+   * the first stray B claims the other, and the third has nothing left to be - marking it
+   * yellow would tell a player there is a third B in a word that has two.
+   */
+  it('does not hand out more of a letter than the answer has', () => {
+    expect(markGuess('BOBBY', 'ABBEY')).toEqual(['near', 'miss', 'hit', 'miss', 'hit']);
+  });
+
+  /** And the exact match takes its letter first, whichever end of the guess it is at. */
+  it('lets an exact match claim its letter before any near miss can', () => {
+    expect(markGuess('EERIE', 'ABIDE')).toEqual(['miss', 'miss', 'miss', 'near', 'hit']);
+  });
+
+  it('is consistent with itself - every word against itself is all hits', () => {
+    for (const word of WORDS) {
+      expect(markGuess(word, word).every((m) => m === 'hit')).toBe(true);
+    }
+  });
+});
+
+/**
+ * The word list is typed by hand, and a four-letter word in it would not throw - it would
+ * quietly become an answer no five-letter guess can ever match.
+ */
+describe('the Wordle word list', () => {
+  it('is nothing but five upper-case letters, with no repeats', () => {
+    expect(WORDS.length).toBeGreaterThan(200);
+    for (const word of WORDS) expect(word).toMatch(/^[A-Z]{5}$/);
+    expect(new Set(WORDS).size).toBe(WORDS.length);
+  });
+});
+
+/** Kept in step with the grid, the pacing and the walk-away rule in wordle.ts. */
+const WORDLE_LETTERS_HINT = 5;
+const WORDLE_TRIES_HINT = 6;
+const WORDLE_ROW_REVEAL_HINT = 1;
+const WORDLE_OVER_PAUSE_HINT = 2.4;
+const WORDLE_RESUME_HINT = 20;
+
+interface WordleKey {
+  value: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface WordleInternals {
+  answer: string;
+  guesses: string[];
+  marks: Mark[][];
+  current: string;
+  candidates: string[];
+  keyMarks: Record<string, Mark | undefined>;
+  keys: WordleKey[];
+  phase: 'typing' | 'revealing' | 'over';
+  mode: 'auto' | 'player';
+  result: 'win' | 'loss' | null;
+  plan: string | null;
+  idle: number;
+  nudge: number;
+  hover: string | null;
+}
+
+describe('Wordle', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const onDone = vi.fn();
+    const w = new Wordle();
+    w.start(ctx, { width: SIZE, height: SIZE, onDone });
+    return { w, ctx, onDone, st: w as unknown as WordleInternals };
+  };
+
+  /** Seconds of animation, at the 16ms frames `pump` deals in. */
+  const seconds = (s: number) => pump(Math.ceil((s * 1000) / 16));
+
+  const keyFor = (st: WordleInternals, value: string): WordleKey =>
+    st.keys.find((k) => k.value === value)!;
+
+  const tap = (w: Wordle, st: WordleInternals, value: string) => {
+    const key = keyFor(st, value);
+    w.onPointerDown(key.x + key.w / 2, key.y + key.h / 2);
+    w.onPointerUp(key.x + key.w / 2, key.y + key.h / 2);
+  };
+
+  const typeWord = (w: Wordle, st: WordleInternals, word: string) => {
+    for (const letter of word) tap(w, st, letter);
+  };
+
+  /** Above the board, where a hand can take the widget over without pressing a key. */
+  const HANDOVER_Y = 2;
+
+  const handOver = () => {
+    const h = start();
+    h.w.onPointerDown(SIZE / 2, HANDOVER_Y);
+    return h;
+  };
+
+  const submit = (w: Wordle, st: WordleInternals, word: string) => {
+    typeWord(w, st, word);
+    tap(w, st, 'ENTER');
+    seconds(WORDLE_ROW_REVEAL_HINT + 0.1);
+  };
+
+  it('lays the whole keyboard out inside the box it was given', () => {
+    const { w, st } = start();
+    for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+      expect(st.keys.some((k) => k.value === letter)).toBe(true);
+    }
+    expect(st.keys.some((k) => k.value === 'ENTER')).toBe(true);
+    expect(st.keys.some((k) => k.value === 'DEL')).toBe(true);
+
+    for (const key of st.keys) {
+      expect(key.x).toBeGreaterThanOrEqual(0);
+      expect(key.y).toBeGreaterThanOrEqual(0);
+      expect(key.x + key.w).toBeLessThanOrEqual(SIZE);
+      expect(key.y + key.h).toBeLessThanOrEqual(SIZE);
+    }
+    w.stop();
+  });
+
+  it('picks an answer it would be willing to guess itself', () => {
+    for (let i = 0; i < 30; i++) {
+      const { w, st } = start();
+      expect(WORDS).toContain(st.answer);
+      expect(st.answer).toHaveLength(WORDLE_LETTERS_HINT);
+      w.stop();
+    }
+  });
+
+  /**
+   * Games are exempt from the cycle clock, so one that never ends holds the screen.
+   *
+   * Six guesses is a hard ceiling, so this reaches an ending whether the autopilot solves
+   * the word or not - which is the whole reason this widget needs no difficulty ramp.
+   */
+  it('reaches an ending on its own, left alone', () => {
+    const { w, onDone, st } = start();
+    for (let f = 0; f < 3000 && onDone.mock.calls.length === 0; f++) pump(1);
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(st.phase).toBe('over');
+    expect(st.result).not.toBeNull();
+    expect(st.guesses.length).toBeGreaterThan(0);
+    expect(st.guesses.length).toBeLessThanOrEqual(WORDLE_TRIES_HINT);
+    w.stop();
+  });
+
+  it('only ever plays real words in front of you', () => {
+    const { w, onDone, st } = start();
+    for (let f = 0; f < 3000 && onDone.mock.calls.length === 0; f++) pump(1);
+
+    for (const guess of st.guesses) expect(WORDS).toContain(guess);
+    w.stop();
+  });
+
+  /** A run it solves has to end on the word, not merely stop. */
+  it('finishes on the answer when it wins, and says how long it took', () => {
+    const { w, ctx, onDone, st } = start();
+    for (let f = 0; f < 3000 && onDone.mock.calls.length === 0; f++) pump(1);
+
+    if (st.result === 'win') {
+      expect(st.guesses[st.guesses.length - 1]).toBe(st.answer);
+      ctx.texts.length = 0;
+      pump(1);
+      expect(ctx.texts.join(' ')).toContain('solved in ' + st.guesses.length);
+    } else {
+      expect(st.guesses).toHaveLength(WORDLE_TRIES_HINT);
+    }
+    w.stop();
+  });
+
+  /**
+   * The shortlist is the deduction, and the answer is by construction always consistent
+   * with every mark on the board. If it ever falls out of the shortlist the solver has
+   * started reasoning from something that is not true.
+   */
+  it('never filters the answer out of its own shortlist', () => {
+    const { w, onDone, st } = start();
+    let seen = 0;
+    for (let f = 0; f < 3000 && onDone.mock.calls.length === 0; f++) {
+      pump(1);
+      if (st.guesses.length === seen) continue;
+      seen = st.guesses.length;
+      expect(st.candidates).toContain(st.answer);
+    }
+    expect(st.candidates).toContain(st.answer);
+    w.stop();
+  });
+
+  it('narrows the shortlist with every mark it gets back', () => {
+    const { w, st } = start();
+    for (let f = 0; f < 3000 && st.guesses.length === 0; f++) pump(1);
+    expect(st.candidates.length).toBeLessThan(WORDS.length);
+    w.stop();
+  });
+
+  /**
+   * The handover, which is the one genuinely surprising thing this widget does.
+   *
+   * A puzzle solved in front of you is not a puzzle you can be handed - the marks on the
+   * board are somebody else's reasoning, and finishing their deduction is not playing.
+   */
+  it('deals a fresh puzzle to a hand arriving, rather than handing over its working', () => {
+    const { w, st } = start();
+    seconds(4);
+    expect(st.guesses.length).toBeGreaterThan(0);
+
+    w.onPointerDown(SIZE / 2, HANDOVER_Y);
+    expect(st.mode).toBe('player');
+    expect(st.guesses).toHaveLength(0);
+    expect(st.marks).toHaveLength(0);
+    expect(st.keyMarks).toEqual({});
+    expect(st.candidates).toHaveLength(WORDS.length);
+    w.stop();
+  });
+
+  /**
+   * The keyboard does not move between puzzles, so the letter under the cursor is the
+   * letter you meant whichever grid is behind it. Swallowing that press would make the
+   * handover feel like a dropped input.
+   */
+  it('lets the tap that hands over land on the key it was aimed at', () => {
+    const { w, st } = start();
+    seconds(4);
+    tap(w, st, 'S');
+
+    expect(st.mode).toBe('player');
+    expect(st.current).toBe('S');
+    w.stop();
+  });
+
+  it('hands over on a tap away from the keyboard without typing anything', () => {
+    const { w, st } = handOver();
+    expect(st.mode).toBe('player');
+    expect(st.current).toBe('');
+    w.stop();
+  });
+
+  it('says what a tap will do before you make one', () => {
+    const { w, ctx } = start();
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('fresh puzzle');
+
+    w.onPointerDown(SIZE / 2, HANDOVER_Y);
+    ctx.texts.length = 0;
+    pump(1);
+    const said = ctx.texts.join(' ');
+    expect(said).not.toContain('fresh puzzle');
+    expect(said).toContain(WORDLE_TRIES_HINT + ' left');
+    w.stop();
+  });
+
+  it('types into the row and takes letters back off it', () => {
+    const { w, st } = handOver();
+    typeWord(w, st, 'CRANE');
+    expect(st.current).toBe('CRANE');
+
+    tap(w, st, 'DEL');
+    expect(st.current).toBe('CRAN');
+    w.stop();
+  });
+
+  it('has nowhere to put a sixth letter', () => {
+    const { w, st } = handOver();
+    typeWord(w, st, 'CRANES');
+    expect(st.current).toBe('CRANE');
+    w.stop();
+  });
+
+  it('will not spend a guess on a short row, and says why', () => {
+    const { w, ctx, st } = handOver();
+    typeWord(w, st, 'CAT');
+    tap(w, st, 'ENTER');
+
+    expect(st.guesses).toHaveLength(0);
+    expect(st.current).toBe('CAT');
+    expect(st.nudge).toBeGreaterThan(0);
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('five letters');
+    w.stop();
+  });
+
+  it('stops complaining once you carry on typing', () => {
+    const { w, ctx, st } = handOver();
+    typeWord(w, st, 'CAT');
+    tap(w, st, 'ENTER');
+    tap(w, st, 'C');
+
+    expect(st.nudge).toBe(0);
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).not.toContain('five letters');
+    w.stop();
+  });
+
+  /**
+   * Guesses are deliberately not checked against a dictionary: a list big enough to accept
+   * the words people actually try is bigger than this whole app, and being told a real
+   * word is not a word is the single most annoying thing a Wordle can do.
+   */
+  it('takes anything five letters long as a guess', () => {
+    const { w, st } = handOver();
+    submit(w, st, 'ZZZZZ');
+    expect(st.guesses).toEqual(['ZZZZZ']);
+    w.stop();
+  });
+
+  it('marks a guess, turns the row over, and moves on', () => {
+    const { w, st } = handOver();
+    st.answer = 'CRANE';
+    typeWord(w, st, 'SLATE');
+    tap(w, st, 'ENTER');
+
+    expect(st.phase).toBe('revealing');
+    // SLATE against CRANE: the A and the E are where they belong, nothing else is.
+    expect(st.marks[0]).toEqual(['miss', 'miss', 'hit', 'miss', 'hit']);
+
+    seconds(WORDLE_ROW_REVEAL_HINT + 0.1);
+    expect(st.phase).toBe('typing');
+    expect(st.current).toBe('');
+    w.stop();
+  });
+
+  it('ignores presses while the row is still turning over', () => {
+    const { w, st } = handOver();
+    typeWord(w, st, 'CRANE');
+    tap(w, st, 'ENTER');
+    expect(st.phase).toBe('revealing');
+
+    tap(w, st, 'S');
+    expect(st.current).toBe('');
+    w.stop();
+  });
+
+  /**
+   * Green outranks yellow outranks grey and never goes back: a later guess that puts a
+   * solved letter in the wrong slot must not un-solve it on the keyboard.
+   */
+  it('never takes a solved letter back off the keyboard', () => {
+    const { w, st } = handOver();
+    st.answer = 'CHAIR';
+
+    submit(w, st, 'CRANE');
+    expect(st.keyMarks['C']).toBe('hit');
+    expect(st.keyMarks['A']).toBe('hit');
+    expect(st.keyMarks['R']).toBe('near');
+
+    // ACORN puts both C and A somewhere they are not, which would demote them.
+    submit(w, st, 'ACORN');
+    expect(st.keyMarks['C']).toBe('hit');
+    expect(st.keyMarks['A']).toBe('hit');
+    w.stop();
+  });
+
+  it('ends on the answer when a player gets it', () => {
+    const { w, ctx, onDone, st } = handOver();
+    st.answer = 'CRANE';
+    submit(w, st, 'CRANE');
+
+    expect(st.phase).toBe('over');
+    expect(st.result).toBe('win');
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('solved in 1');
+
+    expect(onDone).not.toHaveBeenCalled();
+    seconds(WORDLE_OVER_PAUSE_HINT);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  /** Losing without being told the word is the one ending that leaves you worse off. */
+  it('says the word when the guesses run out', () => {
+    const { w, ctx, st } = handOver();
+    st.answer = 'CRANE';
+    for (let i = 0; i < WORDLE_TRIES_HINT; i++) submit(w, st, 'ZZZZZ');
+
+    expect(st.guesses).toHaveLength(WORDLE_TRIES_HINT);
+    expect(st.phase).toBe('over');
+    expect(st.result).toBe('loss');
+    ctx.texts.length = 0;
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('CRANE');
+    w.stop();
+  });
+
+  it('takes no more guesses once the result is up', () => {
+    const { w, st } = handOver();
+    st.answer = 'CRANE';
+    submit(w, st, 'CRANE');
+
+    tap(w, st, 'S');
+    expect(st.current).toBe('');
+    expect(st.guesses).toHaveLength(1);
+    w.stop();
+  });
+
+  it('leaves a board alone while somebody is still thinking about it', () => {
+    const { w, st } = handOver();
+    typeWord(w, st, 'CRA');
+    seconds(WORDLE_RESUME_HINT - 2);
+
+    expect(st.mode).toBe('player');
+    expect(st.current).toBe('CRA');
+    w.stop();
+  });
+
+  it('starts the wait again every time the board is touched', () => {
+    const { w, st } = handOver();
+    for (let i = 0; i < 3; i++) {
+      seconds(WORDLE_RESUME_HINT - 2);
+      tap(w, st, 'C');
+      expect(st.idle).toBe(0);
+    }
+    expect(st.mode).toBe('player');
+    w.stop();
+  });
+
+  /**
+   * A game holds the screen until it calls `finish()`, and a half-typed row will not end
+   * by itself the way a falling stack does. This is the one way out.
+   */
+  it('takes an abandoned board back and plays it to an ending', () => {
+    const { w, onDone, st } = handOver();
+    typeWord(w, st, 'CRA');
+    // Just past the wait: long enough to have taken the board back, short enough that the
+    // autopilot has not yet started typing over it.
+    seconds(WORDLE_RESUME_HINT + 0.2);
+
+    expect(st.mode).toBe('auto');
+    expect(st.current).toBe('');
+
+    for (let f = 0; f < 3000 && onDone.mock.calls.length === 0; f++) pump(1);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  /** Taking the board back means taking the clues with it - those guesses were spent. */
+  it('carries on from what the player already worked out', () => {
+    const { w, st } = handOver();
+    st.answer = 'CRANE';
+    submit(w, st, 'SLATE');
+    expect(st.guesses).toHaveLength(1);
+
+    seconds(WORDLE_RESUME_HINT + 0.2);
+    expect(st.mode).toBe('auto');
+    expect(st.guesses).toHaveLength(1);
+    expect(st.candidates.length).toBeLessThan(WORDS.length);
+    expect(st.candidates).toContain('CRANE');
+    w.stop();
+  });
+
+  it('lights the key under the cursor and lets go of it again', () => {
+    const { w, st } = start();
+    const key = keyFor(st, 'Q');
+    w.onPointerMove(key.x + key.w / 2, key.y + key.h / 2);
+    expect(st.hover).toBe('Q');
+
+    w.onPointerMove(SIZE / 2, HANDOVER_Y);
+    expect(st.hover).toBeNull();
+    w.stop();
+  });
+
+  /** It is a game: it ends by itself, so it has no business asking the clock to wait. */
+  it('never asks the cycle clock to wait', () => {
+    const ctx = makeCtx();
+    const onHold = vi.fn();
+    const w = new Wordle();
+    w.start(ctx, { width: SIZE, height: SIZE, onHold });
+
+    pump(600);
+    w.onPointerDown(SIZE / 2, HANDOVER_Y);
+    pump(600);
+    expect(onHold).not.toHaveBeenCalledWith(true);
     w.stop();
   });
 });

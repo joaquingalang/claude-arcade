@@ -171,9 +171,12 @@ type Kind = 'toy' | 'game';
  * lap of its bag, so the counts stay level however long the session runs, while the order
  * inside a lap is still unguessable.
  *
- * Alternation is what keeps the two kinds level with each other: with the same number of
- * each, one toy then one game means every widget comes up equally often. That is the
- * whole reason a test enforces the two lists being the same length.
+ * Alternation splits the appearances evenly between the two kinds, which is not quite the
+ * same as splitting them evenly between the widgets: the toys share one half and the games
+ * share the other, so with eight games against seven toys each game comes up a shade less
+ * often than each toy. That gap is accepted rather than accidental - see the test in
+ * `tests/widget-ids.test.ts`, which holds the two lists to within one of each other, which
+ * is where the difference stays too small to notice.
  *
  * The alternation deliberately survives the widget being hidden - it is not reset when
  * the window reappears. Restarting at a toy each time would mean short turns, which show

@@ -35,7 +35,7 @@ npm run build                # shared + cli (tsc) and app (vite + tsc)
 ARCADE_DEBUG=1 npm run app   # just the Electron app, renderer logs to stderr
 ```
 
-`npm test` currently runs 436 tests across 10 files in about three seconds. Keep it that
+`npm test` currently runs 476 tests across 10 files in about three seconds. Keep it that
 fast; these tests are meant to be run constantly, so nothing in `tests/` should sleep, bind
 a port, or launch Electron.
 
@@ -93,9 +93,13 @@ This is the most likely reason you are here. It is three edits and a test run:
    forget, and forgetting it means the cycle lands on an id that silently falls back to
    bubble wrap. `tests/widget-ids.test.ts` asserts the two lists match exactly, in order.
 
-   The rotation alternates one toy, one game, so **the two lists have to stay the same
-   length**. An eighth game without an eighth toy makes every game rarer than every toy,
-   which is not something you would notice by watching it. There is a test for that too.
+   The rotation alternates one toy, one game, so the toys share half the appearances and
+   the games share the other half. **Keep the two lists within one of each other**, which a
+   test enforces. They are not equal today - Wordle made it eight games to seven toys, so
+   each game comes up about an eighth less often than each toy, which was judged a better
+   trade than inventing a toy nobody wanted to square the ratio. A list that ran two or
+   three ahead of the other would be a different matter: that is where a widget starts
+   feeling like it has gone missing.
 
 **A game must end by itself.** Everything in `GAME_IDS` is exempt from the cycle clock, so
 it keeps the screen until it calls the inherited `finish()` - and a game that never calls

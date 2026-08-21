@@ -13,6 +13,7 @@ import { Tetris } from './tetris';
 import { ThumbPiano } from './thumb-piano';
 import { TowerOfHanoi } from './tower-of-hanoi';
 import type { CanvasWidget } from './types';
+import { Wordle } from './wordle';
 
 /**
  * The one place a new widget gets wired in. Adding a widget is a new file plus one entry
@@ -36,6 +37,7 @@ export const WIDGET_REGISTRY: Record<string, { label: string; create: () => Canv
   suika: { label: 'Suika', create: () => new Suika() },
   'space-invaders': { label: 'Space Invaders', create: () => new SpaceInvaders() },
   tetris: { label: 'Tetris', create: () => new Tetris() },
+  wordle: { label: 'Wordle', create: () => new Wordle() },
 };
 
 export function createWidget(id: string): CanvasWidget {
