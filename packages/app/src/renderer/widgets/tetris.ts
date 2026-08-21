@@ -97,6 +97,12 @@ const SOFT_HOLD = 0.16;
 const STEER_STEP = 0.045;
 const AUTO_STEP = 0.075;
 
+/** How long the legend stays up at the start of a run, and how long it takes to go. */
+const GUIDE_SECONDS = 2.6;
+const GUIDE_FADE = 0.7;
+/** Where the legend sits: low, where the stack cannot have reached in its first breath. */
+const GUIDE_Y = 0.74;
+
 /**
  * How a placement is scored, once the piece has landed and any full rows are gone.
  *
@@ -104,12 +110,6 @@ const AUTO_STEP = 0.075;
  * holes and a jagged surface are each worth more against you, which is why the autopilot
  * keeps the stack flat and refuses to roof over a gap for one line.
  */
-/** How long the legend stays up at the start of a run, and how long it takes to go. */
-const GUIDE_SECONDS = 2.6;
-const GUIDE_FADE = 0.7;
-/** Where the legend sits: low, where the stack cannot have reached in its first breath. */
-const GUIDE_Y = 0.74;
-
 const W_LINES = 0.76;
 const W_HEIGHT = 0.51;
 const W_HOLES = 0.36;
