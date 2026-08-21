@@ -3,6 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buzzer, knock, pops, rasp } from '../packages/app/src/renderer/audio';
 import { BubbleWrap } from '../packages/app/src/renderer/widgets/bubble-wrap';
 import { BuzzWire, LEVELS } from '../packages/app/src/renderer/widgets/buzz-wire';
+import {
+  type Board,
+  COLS,
+  ConnectFour,
+  type Player,
+  RED,
+  ROWS,
+  YELLOW,
+  bestMove,
+  dropInto,
+  emptyBoard,
+  evaluate,
+  heightOf,
+  idx,
+  isFull,
+  lineThrough,
+  other,
+} from '../packages/app/src/renderer/widgets/connect-four';
 import { FallingSand } from '../packages/app/src/renderer/widgets/falling-sand';
 import {
   COLORWAYS,
@@ -144,6 +162,7 @@ const widgets: Array<{ name: string; make: () => CanvasWidget }> = [
   { name: 'SpaceInvaders', make: () => new SpaceInvaders() },
   { name: 'Tetris', make: () => new Tetris() },
   { name: 'Wordle', make: () => new Wordle() },
+  { name: 'ConnectFour', make: () => new ConnectFour() },
 ];
 
 describe.each(widgets)('$name', ({ make }) => {
@@ -3786,6 +3805,429 @@ describe('Wordle', () => {
     w.onPointerDown(SIZE / 2, HANDOVER_Y);
     pump(600);
     expect(onHold).not.toHaveBeenCalledWith(true);
+    w.stop();
+  });
+});
+
+describe('the Connect Four board', () => {
+  it('stacks discs from the bottom of a column up', () => {
+    const b = emptyBoard();
+    expect(heightOf(b, 0)).toBe(0);
+    expect(dropInto(b, 0, RED)).toBe(0);
+    expect(dropInto(b, 0, YELLOW)).toBe(1);
+    expect(b[idx(0, 0)]).toBe(RED);
+    expect(b[idx(0, 1)]).toBe(YELLOW);
+    expect(heightOf(b, 0)).toBe(2);
+  });
+
+  it('refuses a full column and a column that is not there', () => {
+    const b = emptyBoard();
+    for (let r = 0; r < ROWS; r++) expect(dropInto(b, 3, RED)).toBe(r);
+    expect(dropInto(b, 3, RED)).toBe(-1);
+    expect(dropInto(b, -1, RED)).toBe(-1);
+    expect(dropInto(b, COLS, RED)).toBe(-1);
+  });
+
+  it('is only full once every column is', () => {
+    const b = emptyBoard();
+    for (let c = 0; c < COLS; c++) {
+      for (let r = 0; r < ROWS - 1; r++) dropInto(b, c, RED);
+    }
+    expect(isFull(b)).toBe(false);
+    for (let c = 0; c < COLS; c++) dropInto(b, c, RED);
+    expect(isFull(b)).toBe(true);
+  });
+
+  it('swaps sides and back', () => {
+    expect(other(RED)).toBe(YELLOW);
+    expect(other(YELLOW)).toBe(RED);
+  });
+});
+
+describe('lineThrough', () => {
+  it('finds four across, four up, and four on either diagonal', () => {
+    const across = emptyBoard();
+    for (const c of [1, 2, 3, 4]) dropInto(across, c, RED);
+    expect(lineThrough(across, 4, 0)).toHaveLength(4);
+
+    const up = emptyBoard();
+    for (let r = 0; r < 4; r++) dropInto(up, 2, YELLOW);
+    expect(lineThrough(up, 2, 3)).toHaveLength(4);
+
+    // A staircase up to the right: each column carries one more disc than the last.
+    const rising = emptyBoard();
+    dropInto(rising, 0, RED);
+    dropInto(rising, 1, YELLOW);
+    dropInto(rising, 1, RED);
+    dropInto(rising, 2, YELLOW);
+    dropInto(rising, 2, YELLOW);
+    dropInto(rising, 2, RED);
+    dropInto(rising, 3, YELLOW);
+    dropInto(rising, 3, YELLOW);
+    dropInto(rising, 3, YELLOW);
+    expect(dropInto(rising, 3, RED)).toBe(3);
+    expect(lineThrough(rising, 3, 3)).toHaveLength(4);
+
+    // And the same staircase mirrored, which is the direction the naive loop forgets.
+    const falling = emptyBoard();
+    dropInto(falling, 3, RED);
+    dropInto(falling, 2, YELLOW);
+    dropInto(falling, 2, RED);
+    dropInto(falling, 1, YELLOW);
+    dropInto(falling, 1, YELLOW);
+    dropInto(falling, 1, RED);
+    dropInto(falling, 0, YELLOW);
+    dropInto(falling, 0, YELLOW);
+    dropInto(falling, 0, YELLOW);
+    expect(dropInto(falling, 0, RED)).toBe(3);
+    expect(lineThrough(falling, 0, 3)).toHaveLength(4);
+  });
+
+  it('sees nothing in three, and nothing through an empty square', () => {
+    const b = emptyBoard();
+    for (const c of [1, 2, 3]) dropInto(b, c, RED);
+    expect(lineThrough(b, 2, 0)).toBeNull();
+    expect(lineThrough(b, 5, 0)).toBeNull();
+  });
+
+  /**
+   * A line of five comes back whole.
+   *
+   * It is drawn as well as counted, so returning a four out of the middle of a five would
+   * ring three of the discs and leave the other two plainly in the row and unmarked.
+   */
+  it('returns a run of five entire, because the win gets highlighted', () => {
+    const b = emptyBoard();
+    for (const c of [0, 1, 2, 3, 4]) dropInto(b, c, RED);
+    expect(lineThrough(b, 2, 0)).toHaveLength(5);
+  });
+});
+
+describe('the Connect Four evaluation', () => {
+  it('reads a position the same from both sides, with the sign flipped', () => {
+    const b = emptyBoard();
+    dropInto(b, 3, RED);
+    dropInto(b, 3, YELLOW);
+    dropInto(b, 2, RED);
+    dropInto(b, 4, YELLOW);
+    dropInto(b, 2, RED);
+    expect(evaluate(b, RED)).toBe(-evaluate(b, YELLOW));
+  });
+
+  it('calls an empty board level', () => {
+    expect(evaluate(emptyBoard(), RED)).toBe(0);
+  });
+
+  it('is worth more to have three going than two', () => {
+    const two = emptyBoard();
+    dropInto(two, 1, RED);
+    dropInto(two, 2, RED);
+
+    const three = emptyBoard();
+    dropInto(three, 1, RED);
+    dropInto(three, 2, RED);
+    dropInto(three, 3, RED);
+
+    expect(evaluate(three, RED)).toBeGreaterThan(evaluate(two, RED));
+  });
+
+  /** A window with both colours in it can never be filled, so it is worth nothing. */
+  it('writes off a run somebody has already blocked', () => {
+    const open = emptyBoard();
+    dropInto(open, 1, RED);
+    dropInto(open, 2, RED);
+    dropInto(open, 3, RED);
+
+    const blocked = emptyBoard();
+    dropInto(blocked, 1, RED);
+    dropInto(blocked, 2, RED);
+    dropInto(blocked, 3, RED);
+    dropInto(blocked, 4, YELLOW);
+    dropInto(blocked, 0, YELLOW);
+
+    expect(evaluate(blocked, RED)).toBeLessThan(evaluate(open, RED));
+  });
+});
+
+describe('bestMove', () => {
+  it('takes a win that is there', () => {
+    const b = emptyBoard();
+    for (const c of [1, 2, 3]) dropInto(b, c, YELLOW);
+    // Either end finishes it.
+    expect([0, 4]).toContain(bestMove(b, YELLOW));
+  });
+
+  it('blocks the only square that loses it the game', () => {
+    const b = emptyBoard();
+    // Red has three along the left wall, so column 3 is the one square that matters.
+    for (const c of [0, 1, 2]) dropInto(b, c, RED);
+    expect(bestMove(b, YELLOW)).toBe(3);
+  });
+
+  /** Slack picks between near-equal moves; it must never be enough to pass up a win. */
+  it('wins rather than defends when it can do either', () => {
+    const b = emptyBoard();
+    for (const c of [0, 1, 2]) dropInto(b, c, RED);
+    for (let r = 0; r < 3; r++) dropInto(b, 6, YELLOW);
+    for (let i = 0; i < 40; i++) expect(bestMove(b, YELLOW)).toBe(6);
+  });
+
+  it('has nothing to say about a full board', () => {
+    const b = new Array<Player>(COLS * ROWS).fill(RED) as Board;
+    expect(isFull(b)).toBe(true);
+    expect(bestMove(b, YELLOW)).toBe(-1);
+  });
+
+  it('only ever names a column with room in it', () => {
+    const b = emptyBoard();
+    let player: Player = RED;
+    for (let move = 0; move < 30 && !isFull(b); move++) {
+      const col = bestMove(b, player);
+      expect(col).toBeGreaterThanOrEqual(0);
+      expect(col).toBeLessThan(COLS);
+      expect(heightOf(b, col)).toBeLessThan(ROWS);
+      const row = dropInto(b, col, player);
+      if (lineThrough(b, col, row) !== null) break;
+      player = other(player);
+    }
+  });
+
+  /**
+   * The slack is what stops the demo replaying one game forever.
+   *
+   * Not a strict requirement of correctness, but if it never varied the widget would show
+   * the same forty discs land in the same forty places every time it came up.
+   */
+  it('does not play the same opening every time', () => {
+    const seen = new Set<number>();
+    for (let i = 0; i < 60; i++) seen.add(bestMove(emptyBoard(), RED));
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+interface ConnectFourInternals {
+  board: Board;
+  turn: Player;
+  mode: 'auto' | 'player';
+  phase: 'thinking' | 'dropping' | 'over';
+  result: 'red' | 'yellow' | 'draw' | null;
+  falling: {
+    col: number;
+    row: number;
+    player: Player;
+    y: number;
+    vy: number;
+  } | null;
+  winLine: number[] | null;
+  idle: number;
+  hover: number | null;
+  cell: number;
+  boardLeft: number;
+  boardTop: number;
+}
+
+describe('ConnectFour', () => {
+  const start = () => {
+    const ctx = makeCtx();
+    const onDone = vi.fn();
+    const w = new ConnectFour();
+    w.start(ctx, { width: SIZE, height: SIZE, onDone });
+    return { w, ctx, onDone, st: w as unknown as ConnectFourInternals };
+  };
+
+  /** Seconds of animation, at the 16ms frames `pump` deals in. */
+  const seconds = (s: number) => pump(Math.ceil((s * 1000) / 16));
+
+  const centreOf = (st: ConnectFourInternals, col: number) => st.boardLeft + (col + 0.5) * st.cell;
+
+  const runToEnd = (onDone: ReturnType<typeof vi.fn>) => {
+    for (let f = 0; f < 12000 && onDone.mock.calls.length === 0; f++) pump(1);
+  };
+
+  it('lays the grid and the caption out inside the box it was given', () => {
+    const { w, st } = start();
+    expect(st.boardLeft).toBeGreaterThan(0);
+    expect(st.boardLeft + COLS * st.cell).toBeLessThan(SIZE);
+    expect(st.boardTop + ROWS * st.cell).toBeLessThan(SIZE);
+    w.stop();
+  });
+
+  /**
+   * Games are exempt from the cycle clock, so one that never ends holds the screen.
+   *
+   * Forty-two squares and one filled per move is a hard ceiling on the length of a game,
+   * which is why this widget needs no difficulty ramp to be sure of stopping.
+   */
+  it('reaches an ending on its own, left alone', () => {
+    const { w, onDone, st } = start();
+    runToEnd(onDone);
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(st.phase).toBe('over');
+    expect(['red', 'yellow', 'draw']).toContain(st.result);
+    w.stop();
+  });
+
+  it('only ever calls a win on four of one colour actually in a row', () => {
+    for (let run = 0; run < 4; run++) {
+      const { w, onDone, st } = start();
+      runToEnd(onDone);
+
+      if (st.result === 'draw') {
+        expect(st.winLine).toBeNull();
+        expect(isFull(st.board)).toBe(true);
+      } else {
+        const line = st.winLine!;
+        expect(line.length).toBeGreaterThanOrEqual(4);
+        const winner = st.result === 'red' ? RED : YELLOW;
+        for (const cell of line) expect(st.board[cell]).toBe(winner);
+      }
+      w.stop();
+    }
+  });
+
+  it('says what a tap will do before you make one', () => {
+    const { w, ctx } = start();
+    pump(1);
+    expect(ctx.texts.join(' ')).toContain('tap a column to play');
+    w.stop();
+  });
+
+  /**
+   * The rule this widget shares with Wordle, and the reason it exists.
+   *
+   * Connect Four is solved, so a position is never neutral - being handed one three moves
+   * from a forced loss is being handed the losing half of a game somebody else played. So
+   * a hand arriving clears the board rather than inheriting it. The click still lands in
+   * the column it was aimed at, because the columns do not move between boards.
+   */
+  it('deals a fresh board on the first touch, and still drops the disc you aimed at', () => {
+    const { w, st } = start();
+    seconds(6);
+    expect(st.board.some((cell) => cell !== 0)).toBe(true);
+
+    w.onPointerDown(centreOf(st, 2), SIZE / 2);
+
+    expect(st.mode).toBe('player');
+    expect(st.board.every((cell) => cell === 0)).toBe(true);
+    expect(st.falling?.col).toBe(2);
+    expect(st.falling?.player).toBe(RED);
+
+    seconds(1.5);
+    expect(st.board[idx(2, 0)]).toBe(RED);
+    w.stop();
+  });
+
+  it('waits for a player rather than moving for them', () => {
+    const { w, st } = start();
+    w.onPointerDown(centreOf(st, 3), SIZE / 2);
+    seconds(3);
+
+    // Red is the player: the solver has replied in yellow and then stopped.
+    expect(st.turn).toBe(RED);
+    expect(st.phase).toBe('thinking');
+    const before = st.board.filter((cell) => cell !== 0).length;
+    seconds(5);
+    expect(st.board.filter((cell) => cell !== 0).length).toBe(before);
+    w.stop();
+  });
+
+  it('ignores a press beside the grid without dropping anything there', () => {
+    const { w, st } = start();
+    w.onPointerDown(1, SIZE / 2);
+
+    expect(st.mode).toBe('player');
+    expect(st.falling).toBeNull();
+    expect(st.board.every((cell) => cell === 0)).toBe(true);
+    w.stop();
+  });
+
+  it('will not stack a disc on a column that is already full', () => {
+    const { w, st } = start();
+    w.onPointerDown(centreOf(st, 0), SIZE / 2);
+    seconds(1);
+    for (let r = 0; r < ROWS; r++) st.board[idx(0, r)] = RED;
+    st.turn = RED;
+    st.phase = 'thinking';
+    st.falling = null;
+
+    w.onPointerDown(centreOf(st, 0), SIZE / 2);
+    expect(st.falling).toBeNull();
+    w.stop();
+  });
+
+  /**
+   * A board somebody walked away from is the one way this could hold the screen forever,
+   * since it will wait for a player indefinitely. After the timeout the solver takes the
+   * position back - keeping it, because there is nobody left to hand a lost game to.
+   */
+  it('finishes a game that was abandoned mid-board', () => {
+    const { w, st, onDone } = start();
+    w.onPointerDown(centreOf(st, 3), SIZE / 2);
+    seconds(3);
+    const played = st.board.filter((cell) => cell !== 0).length;
+    expect(played).toBeGreaterThan(0);
+
+    seconds(25);
+    expect(st.mode).toBe('auto');
+    // It picked the position up rather than dealing itself a new one.
+    expect(st.board.filter((cell) => cell !== 0).length).toBeGreaterThanOrEqual(played);
+
+    runToEnd(onDone);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
+  /**
+   * A whole game actually played against the solver, one tap at a time.
+   *
+   * The leftmost open column is a terrible strategy and will usually lose, which is fine -
+   * what is being checked is that a game played by a hand ends by telling that hand how it
+   * went, rather than reporting a colour at somebody who was never told which one was
+   * theirs.
+   */
+  it('tells the player whose game it was who won it', () => {
+    const { w, ctx, st, onDone } = start();
+    w.onPointerDown(centreOf(st, 3), SIZE / 2);
+
+    for (let f = 0; f < 12000 && onDone.mock.calls.length === 0; f++) {
+      if (st.mode === 'player' && st.phase === 'thinking' && st.turn === RED) {
+        let col = 0;
+        while (col < COLS && heightOf(st.board, col) >= ROWS) col++;
+        w.onPointerDown(centreOf(st, col), SIZE / 2);
+        w.onPointerUp(centreOf(st, col), SIZE / 2);
+      }
+      pump(1);
+    }
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(st.mode).toBe('player');
+
+    ctx.texts.length = 0;
+    pump(1);
+    expect(['you win', 'you lose', 'drawn']).toContain(ctx.texts.join(' ').trim());
+    w.stop();
+  });
+
+  it('knocks once a disc has landed, and stays silent while it is falling', () => {
+    const spy = vi.spyOn(knock, 'tick');
+    const { w, st } = start();
+    w.onPointerDown(centreOf(st, 3), SIZE / 2);
+    expect(spy).not.toHaveBeenCalled();
+
+    seconds(1.2);
+    expect(spy).toHaveBeenCalled();
+    w.stop();
+    spy.mockRestore();
+  });
+
+  it('lights the column under the pointer, and drops it at the edge', () => {
+    const { w, st } = start();
+    w.onPointerMove(centreOf(st, 5), SIZE / 2);
+    expect(st.hover).toBe(5);
+
+    w.onPointerMove(SIZE - 1, SIZE / 2);
+    expect(st.hover).toBeNull();
     w.stop();
   });
 });

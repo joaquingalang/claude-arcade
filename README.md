@@ -171,7 +171,7 @@ Handing cmd its arguments as separate argv entries keeps Node's own quoting, and
 
 ## Widgets
 
-Fifteen toys, split between fidget toys that run on a clock and games that run to an end.
+Sixteen toys, split between fidget toys that run on a clock and games that run to an end.
 All of them are mouse-only, because the window never takes keyboard focus.
 
 | id | interaction | ends when |
@@ -191,13 +191,16 @@ All of them are mouse-only, because the window never takes keyboard focus.
 | `space-invaders` | the pointer steers; the ship fires itself | 2 waves cleared, or 3 lives |
 | `tetris` | arrow keys, or point to slide, tap to turn, hold to drop | the stack tops out; it only gets quicker |
 | `wordle` | tap the on-screen keyboard; a tap deals you a fresh word | solved, or six guesses spent |
+| `connect-four` | point at a column and click; a tap deals you a fresh board | four in a row, or the grid fills |
 
 Most of the games play themselves until you touch them - a toy that sits still until
 instructed is a chore. Simon is the exception, because a memory game cannot demo itself:
 it waits with a play mark in the hub, and hands the rotation on if nobody starts it.
-Wordle is the other way round: it plays on, but a tap deals you a clean grid rather than
-handing you the board it was working on, because finishing somebody else's deduction is
-marking their homework rather than playing. It says so on screen before you touch it.
+Wordle and Connect Four are the other way round: they play on, but a tap deals you a clean
+grid rather than handing you the board they were working on, because finishing somebody
+else's deduction is marking their homework rather than playing - and because Connect Four
+is solved, so a position halfway through is never neutral and inheriting one can just mean
+inheriting the losing half. Both say so on screen before you touch them.
 
 The buzz wire walks a ladder of courses while it plays itself - five shapes at three
 grades, cycling easy, medium, hard rather than climbing to a wall - so the course you pick
@@ -209,9 +212,9 @@ before it did.
 **The rotation alternates a fidget toy and a game**, starting on a toy, and picks at random
 within each kind - from a shuffle bag rather than plain random, so everything comes up
 about as often as everything else without the order being guessable. Alternating splits the
-appearances evenly between the two kinds rather than between the fifteen widgets, so with
-eight games against seven toys each game turns up a shade less often than each toy; the two
-lists are kept within one of each other, which is where that gap stays too small to spot.
+appearances evenly between the two kinds rather than between the sixteen widgets, so with
+nine games against seven toys each game turns up about a fifth less often than each toy;
+keeping the two lists close is what keeps that gap too small to spot.
 Fidget toys move along after `cycleMs`; games keep the screen until they reach their end,
 because being pulled off court at 4-3 is worse than never having played. A finished game
 hands over to the next widget, or restarts in place if rotation is off.

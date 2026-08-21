@@ -131,6 +131,7 @@ describe('isSelfPaced', () => {
       'space-invaders',
       'tetris',
       'wordle',
+      'connect-four',
     ]) {
       expect(isSelfPaced(id)).toBe(true);
     }

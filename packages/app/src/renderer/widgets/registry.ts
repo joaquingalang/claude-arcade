@@ -1,5 +1,6 @@
 import { BubbleWrap } from './bubble-wrap';
 import { BuzzWire } from './buzz-wire';
+import { ConnectFour } from './connect-four';
 import { FallingSand } from './falling-sand';
 import { FidgetSpinner } from './fidget-spinner';
 import { FlappyBird } from './flappy-bird';
@@ -38,6 +39,7 @@ export const WIDGET_REGISTRY: Record<string, { label: string; create: () => Canv
   'space-invaders': { label: 'Space Invaders', create: () => new SpaceInvaders() },
   tetris: { label: 'Tetris', create: () => new Tetris() },
   wordle: { label: 'Wordle', create: () => new Wordle() },
+  'connect-four': { label: 'Connect Four', create: () => new ConnectFour() },
 };
 
 export function createWidget(id: string): CanvasWidget {
