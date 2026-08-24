@@ -23,6 +23,8 @@ export interface ArcadeBridge {
   dragMove(): void;
   dragEnd(): void;
   dismiss(): void;
+  /** Tell main a hand is on this widget - see the preload's `playing`. */
+  playing(): void;
   /** Tell main this widget's run is over and it is ready to hand over. */
   widgetDone(widgetId: string): void;
   /**

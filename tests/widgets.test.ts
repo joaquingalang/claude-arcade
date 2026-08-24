@@ -2774,6 +2774,9 @@ const TETRIS_LEVEL_LINES_HINT = 3;
 interface TetrisInternals {
   board: number[];
   kind: number;
+  next: number;
+  held: number | null;
+  swapped: boolean;
   rot: number;
   col: number;
   row: number;
@@ -3215,13 +3218,158 @@ describe('Tetris', () => {
     w.stop();
   });
 
+  /**
+   * The square piece, parked at the left wall.
+   *
+   * Sideways tests need a piece whose travel is not cut short by the edge of the well
+   * halfway through what is being measured, and the O is the one that occupies two columns
+   * in every rotation, so where it may go is the same fact before and after a turn.
+   */
+  const squareAtTheWall = (st: TetrisInternals) => {
+    st.kind = 3;
+    st.rot = 0;
+    st.col = 0;
+  };
+
+  /**
+   * Holding an arrow down is worth more than tapping it that many times.
+   *
+   * The accelerator never reports a key being let go, so there is no repeat of the
+   * widget's own to test here - only that a run of presses arriving at auto-repeat speed
+   * is recognised as a hold and paid more per press. That is what stops the sideways speed
+   * from being whatever rate the desk happens to be set to repeat at.
+   */
+  it('sweeps further per press once the arrow is being held down', () => {
+    const { w, st } = start(true);
+    squareAtTheWall(st);
+
+    for (let i = 0; i < 4; i++) {
+      w.onKey('Right');
+      pump(1); // ~16ms apart, which is auto-repeat and nothing else
+    }
+
+    expect(st.col).toBeGreaterThan(4);
+    w.stop();
+  });
+
+  /** And the other half of it: a hand tapping must still land exactly where it aimed. */
+  it('still moves one column per press at the speed a hand taps', () => {
+    const { w, st } = start(true);
+    squareAtTheWall(st);
+
+    for (let i = 0; i < 3; i++) {
+      w.onKey('Right');
+      pump(12); // ~190ms apart, faster than most people tap and still not a hold
+    }
+
+    expect(st.col).toBe(3);
+    w.stop();
+  });
+
+  /** Turning round mid-sweep starts a fresh run rather than inheriting the old one. */
+  it('does not carry a sweep over into the other direction', () => {
+    const { w, st } = start(true);
+    squareAtTheWall(st);
+    for (let i = 0; i < 4; i++) {
+      w.onKey('Right');
+      pump(1);
+    }
+    const reached = st.col;
+
+    w.onKey('Left');
+    expect(st.col).toBe(reached - 1);
+    w.stop();
+  });
+
+  /**
+   * The drop key, which is the only way to put a piece down before the fall gets to it.
+   *
+   * Locked where it lands rather than given the usual grace: the appeal of a hard drop is
+   * that the piece is placed, and a piece that slides about for a fifth of a second
+   * afterwards is the thing the key was pressed to skip.
+   */
+  it('slams the piece to where the ghost is and locks it there', () => {
+    const { w, st } = start(true);
+    const kind = st.kind;
+    const following = st.next;
+    const cells = ROTATIONS[kind]![st.rot]!.map((c) => ({ col: st.col + c.x, y: c.y }));
+    const deepest = Math.max(...cells.map((c) => c.y));
+
+    w.onKey('Drop');
+
+    for (const c of cells) {
+      expect(at(st, TETRIS_ROWS_HINT - 1 - (deepest - c.y), c.col)).toBe(kind);
+    }
+    // And the next piece is already falling - there is nothing left of the old one to
+    // steer, which is the whole difference between this and holding the down arrow.
+    expect(st.kind).toBe(following);
+    expect(st.row).toBe(0);
+    w.stop();
+  });
+
+  it('puts the falling piece by, and takes the next one out of the queue', () => {
+    const { w, st } = start(true);
+    const putBy = st.kind;
+    const following = st.next;
+
+    w.onKey('Hold');
+
+    expect(st.held).toBe(putBy);
+    expect(st.kind).toBe(following);
+    w.stop();
+  });
+
+  it('brings the held piece back the next time, once a piece has landed', () => {
+    const { w, st } = start(true);
+    const first = st.kind;
+
+    w.onKey('Hold');
+    // The swap is spent until something lands, so the well is given a piece.
+    w.onKey('Drop');
+    const falling = st.kind;
+
+    w.onKey('Hold');
+    expect(st.kind).toBe(first);
+    expect(st.held).toBe(falling);
+    w.stop();
+  });
+
+  /**
+   * One swap per piece, which is the rule everywhere else and is not an arbitrary one:
+   * swapping twice with nothing in between is a way to sit on a piece and never have to
+   * place it, and against a fall that only ever quickens that is the single move that
+   * would let a run go on forever.
+   */
+  it('will not let the same piece be swapped out twice', () => {
+    const { w, st } = start(true);
+    w.onKey('Hold');
+    const brought = st.kind;
+    const stored = st.held;
+
+    w.onKey('Hold');
+
+    expect(st.kind).toBe(brought);
+    expect(st.held).toBe(stored);
+    expect(st.swapped).toBe(true);
+    w.stop();
+  });
+
+  /** A slot nobody can identify is a key nobody presses. */
+  it('names both panel slots', () => {
+    const { w, ctx } = start(true);
+    pump(1);
+    expect(ctx.texts).toContain('next');
+    expect(ctx.texts).toContain('hold');
+    w.stop();
+  });
+
   it('ignores keys once the run is over', () => {
     const { w, st } = start(true);
     st.phase = 'over';
     const before = { rot: st.rot, col: st.col, row: st.row };
 
     expect(() => {
-      for (const key of ['Left', 'Right', 'Up', 'Down'] as const) w.onKey(key);
+      for (const key of ['Left', 'Right', 'Up', 'Down', 'Drop', 'Hold'] as const) w.onKey(key);
     }).not.toThrow();
     expect({ rot: st.rot, col: st.col, row: st.row }).toEqual(before);
     w.stop();

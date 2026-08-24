@@ -203,11 +203,12 @@ worth reaching, so it runs as an accessory and its only visible form is the toy 
 `arcade doctor` - which prints the same lines with `/Users/you/...` paths - is how you ask
 whether it is running.
 
-**Snake and Tetris ask for the arrow keys** while they are on screen, exactly the trade
-described under [The arrow keys](#the-arrow-keys). Asking is best-effort: if macOS or
-another app already holds one of the four, the widget simply does not get that key and
-pointer steering carries the game. That is the reason both are complete under the pointer
-rather than a consolation for when it fails.
+**Snake and Tetris ask for the arrow keys** while they are on screen, and Tetris asks for
+two more for as long as you are actually playing it - exactly the trade described under
+[The arrow keys](#the-arrow-keys). Asking is best-effort: if macOS or another app already
+holds one of them, the widget simply does not get that key and pointer steering carries
+the game. That is the reason both are complete under the pointer rather than a
+consolation for when it fails.
 
 ## Widgets
 
@@ -229,7 +230,7 @@ All of them are mouse-only, because the window never takes keyboard focus.
 | `simon` | click to start, then the pads back in the order they flashed | a wrong pad, 8 rounds, or never started |
 | `suika` | point to aim, click to drop; same fruit fuse | the basket empties, or the jar overflows |
 | `space-invaders` | the pointer steers; the ship fires itself | 2 waves cleared, or 3 lives |
-| `tetris` | arrow keys, or point to slide, tap to turn, hold to drop | the stack tops out; it only gets quicker |
+| `tetris` | arrow keys, space to drop, `c` to hold; or point to slide, tap to turn, hold to drop | the stack tops out; it only gets quicker |
 | `wordle` | tap the on-screen keyboard; a tap deals you a fresh word | solved, or six guesses spent |
 | `connect-four` | point at a column and click; a tap deals you a fresh board | four in a row, or the grid fills |
 
@@ -324,6 +325,14 @@ affected; ordinary typing is not. Three things bound it: arrows only and never l
 registered only while a widget that asked for them is showing, and handed back on hide,
 rotation and quit; and `"arrowKeys": false` in `config.json` turns it off entirely.
 
+Tetris also wants **space** to slam a piece down and **`c`** to put one by for later, and
+those two cannot be held on the same terms - a toy in the corner quietly eating the space
+bar out of the sentence you are typing would be indefensible. So they are held on a much
+shorter lead: taken only while a hand is actually on the widget - an arrow press, or the
+cursor moving over it - and handed straight back four seconds later. The one visible cost
+is that space does nothing if it is the very first thing you touch, before either the
+arrows or the mouse have been anywhere near the toy.
+
 Both widgets are complete under the pointer, which is the price of being on that list -
 turning the grab off costs you a control scheme, not a game. Tetris says which one you
 have in the legend it opens with, so a desk that turned the arrows off is never taught a
@@ -339,7 +348,7 @@ prints the path.
 | `widget` | `random` | a widget id, or `random` |
 | `showDelayMs` | `2500` | how long a turn must run before anything appears |
 | `cycleMs` | `15000` | time on screen per fidget toy; `0` disables cycling. Games ignore it |
-| `arrowKeys` | `true` | let Snake and Tetris take the arrow keys system-wide while on screen |
+| `arrowKeys` | `true` | let Snake and Tetris take the arrow keys system-wide while on screen, and Tetris its two action keys while you are playing |
 | `position` | `null` | where you dragged it; `null` means bottom-right of the work area |
 | `soundEnabled` | `false` | let widgets make a noise. Read on every show |
 

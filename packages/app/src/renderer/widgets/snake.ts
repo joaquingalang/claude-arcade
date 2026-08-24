@@ -1,4 +1,4 @@
-import { CanvasWidget, type ArrowKey } from './types';
+import { CanvasWidget, type ArrowKey, type GameKey } from './types';
 
 const COLS = 13;
 const ROWS = 13;
@@ -432,9 +432,13 @@ export class Snake extends CanvasWidget {
    * two presses inside one step both land - up-then-left round a corner is one gesture,
    * not a race against the step timer.
    */
-  override onKey(key: ArrowKey): void {
+  override onKey(key: GameKey): void {
     if (this.over) return;
-    const dir = KEY_DIRS[key];
+    // Snake is sent every key main happens to be holding for the widget on screen, and
+    // the action keys are Tetris's. Ignored outright rather than swallowed as a takeover:
+    // a key this game does nothing with is not somebody putting a hand on this game.
+    const dir = KEY_DIRS[key as ArrowKey] as Cell | undefined;
+    if (!dir) return;
 
     // Taking the keyboard is itself the input. Pressing the way the autopilot already
     // happens to be heading still means "I am driving now", so this comes before any

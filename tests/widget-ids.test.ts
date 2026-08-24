@@ -8,6 +8,7 @@ import {
   WIDGET_IDS,
   WidgetRotation,
   isSelfPaced,
+  wantsActionKeys,
   wantsKeyboard,
 } from '../packages/app/src/main/widget-ids';
 import { WIDGET_REGISTRY } from '../packages/app/src/renderer/widgets/registry';
@@ -232,6 +233,30 @@ describe('wantsKeyboard', () => {
 
   it('is false for an unknown id', () => {
     expect(wantsKeyboard('not-a-widget')).toBe(false);
+  });
+});
+
+describe('wantsActionKeys', () => {
+  // Shorter still, and it has to be. An arrow taken from the desktop costs you shell
+  // history; the space bar taken from the desktop costs you the ability to type, so this
+  // list is one widget long and the bridge only ever holds those keys while somebody is
+  // demonstrably mid-run - see KeyboardBridge.
+  //
+  // Spelt out for the same reason the list above is: growing it means editing a test that
+  // says what it costs.
+  it('is tetris and nothing else', () => {
+    expect(WIDGET_IDS.filter(wantsActionKeys)).toEqual(['tetris']);
+  });
+
+  // Nothing may want the action keys without wanting the arrows: they are armed by an
+  // arrow press and by nothing else, so a widget on one list and not the other would ask
+  // for two keys it had no way of ever being handed.
+  it('never asks for the action keys without the arrows', () => {
+    expect(WIDGET_IDS.filter(wantsActionKeys).every(wantsKeyboard)).toBe(true);
+  });
+
+  it('is false for an unknown id', () => {
+    expect(wantsActionKeys('not-a-widget')).toBe(false);
   });
 });
 

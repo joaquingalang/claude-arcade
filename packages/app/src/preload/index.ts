@@ -37,6 +37,14 @@ export interface ArcadeBridge {
   dragMove(): void;
   dragEnd(): void;
   dismiss(): void;
+  /**
+   * A hand is on this widget right now.
+   *
+   * Only worth sending for a widget main is holding action keys for, and cheap enough to
+   * send often - it is a bare signal with no payload, and main throws it away unless the
+   * widget on screen is one that asked for those keys.
+   */
+  playing(): void;
   widgetDone(widgetId: string): void;
   widgetHold(widgetId: string, holding: boolean): void;
   /**
@@ -73,6 +81,7 @@ const bridge: ArcadeBridge = {
   dragMove: () => ipcRenderer.send('arcade:drag-move'),
   dragEnd: () => ipcRenderer.send('arcade:drag-end'),
   dismiss: () => ipcRenderer.send('arcade:dismiss'),
+  playing: () => ipcRenderer.send('arcade:playing'),
   widgetDone: (widgetId) => ipcRenderer.send('arcade:widget-done', widgetId),
   widgetHold: (widgetId, holding) => ipcRenderer.send('arcade:widget-hold', widgetId, holding),
   readSample: (name) => ipcRenderer.invoke('arcade:read-sample', name),

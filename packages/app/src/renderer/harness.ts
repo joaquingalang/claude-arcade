@@ -1,6 +1,6 @@
 import { setSoundEnabled } from './audio';
 import { WIDGET_REGISTRY, createWidget } from './widgets/registry';
-import type { ArrowKey, CanvasWidget } from './widgets/types';
+import type { CanvasWidget, GameKey } from './widgets/types';
 
 const SIZE = 280;
 const live = new Map<string, CanvasWidget>();
@@ -75,24 +75,33 @@ for (const [id, entry] of Object.entries(WIDGET_REGISTRY)) {
 }
 
 /**
- * Arrow keys for whichever widget the pointer is over.
+ * Game keys for whichever widget the pointer is over.
  *
- * In the app the arrows come from a global accelerator and only one widget is on screen,
- * so there is nothing to choose between. Here a dozen are up at once, and hovering is the
+ * In the app the keys come from a global accelerator and only one widget is on screen, so
+ * there is nothing to choose between. Here a dozen are up at once, and hovering is the
  * one gesture that already means "this one". Without this the keyboard half of Snake and
  * Tetris could only be tried by launching Electron.
+ *
+ * The two action keys are spelt out here as the keys they actually are, because this is
+ * the only place in the renderer that has to know: everywhere past this they travel under
+ * the name of what they do. Held down, a browser repeats a keydown the same way the
+ * desktop's accelerator does, so what is tried here is what ships.
  */
-const ARROWS: Record<string, ArrowKey> = {
+const KEYS: Record<string, GameKey> = {
   ArrowLeft: 'Left',
   ArrowRight: 'Right',
   ArrowUp: 'Up',
   ArrowDown: 'Down',
+  ' ': 'Drop',
+  c: 'Hold',
+  C: 'Hold',
 };
 
 window.addEventListener('keydown', (e) => {
-  const key = ARROWS[e.key];
+  const key = KEYS[e.key];
   if (!key || !focused) return;
-  // Or the page scrolls out from under the widget being played.
+  // Or the page scrolls out from under the widget being played - which the space bar
+  // does at least as enthusiastically as the arrows.
   e.preventDefault();
   focused.onKey(key);
 });

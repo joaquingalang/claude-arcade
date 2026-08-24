@@ -21,8 +21,9 @@ import {
   WIDGET_IDS,
   WidgetRotation,
   isSelfPaced,
+  wantsActionKeys,
   wantsKeyboard,
-  type ArrowKey,
+  type GameKey,
 } from './widget-ids';
 
 const VERSION = '0.1.0';
@@ -123,7 +124,9 @@ function syncKeyboard(): void {
     (widgetWindow?.isVisible() ?? false) &&
     wantsKeyboard(currentWidgetId) &&
     config.get().arrowKeys;
-  keyboard?.setActive(want);
+  // The action keys are a second question, answered per widget: only Tetris has anything
+  // to do with them, and even there the bridge only takes them once somebody is playing.
+  keyboard?.setActive(want, want && wantsActionKeys(currentWidgetId));
 }
 
 /** Swap in `id` and re-arm whatever paces it next. */
@@ -324,7 +327,7 @@ async function bootstrap(): Promise<void> {
   );
   widgetWindow.create(config.get().position);
 
-  keyboard = new KeyboardBridge((key: ArrowKey) => {
+  keyboard = new KeyboardBridge((key: GameKey) => {
     widgetWindow?.sendKey(key);
   });
 
@@ -353,6 +356,12 @@ app.whenReady().then(() => {
   });
   ipcMain.on('arcade:drag-end', () => {
     widgetWindow?.endDrag();
+  });
+  // A hand on the widget, which is the other half of "somebody is playing" - the first
+  // half being a keypress. Ignored unless the widget on screen asked for the action keys,
+  // which `arm` decides for itself, so this stays a one-liner.
+  ipcMain.on('arcade:playing', () => {
+    keyboard?.arm();
   });
   ipcMain.on('arcade:dismiss', () => {
     dismissedAtPrompt = sessions.promptCount();

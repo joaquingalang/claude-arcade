@@ -17,6 +17,11 @@ export interface ArcadeConfig {
    * The one setting that trades away the app's "your keystrokes always reach the
    * terminal" guarantee, which is why it is a setting at all. See `wantsKeyboard` for
    * which widgets ask; every one of them is fully playable by pointer without this.
+   *
+   * It gates the two action keys as well, and the name has stayed `arrowKeys` through
+   * that: renaming it would silently hand the keys back to anybody who had turned them
+   * off, which is the same mistake `migrate` exists to have avoided once already. Those
+   * two are only ever taken mid-run and given straight back - see `KeyboardBridge`.
    */
   arrowKeys: boolean;
   soundEnabled: boolean;

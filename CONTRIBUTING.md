@@ -143,6 +143,16 @@ taste:
   if it can also be steered by the pointer, it must be - both widgets on that list are
   complete without a keyboard, and that is the condition for being on it.
 
+  Two more keys, `Drop` and `Hold`, reach a widget in the shorter `wantsActionKeys()` list -
+  Tetris and nothing else. They are spelt space and `c`, which are keys people type, so
+  `KeyboardBridge` holds them only while a hand is on the widget - an arrow press, or
+  pointer input the renderer reports through `arcade:playing` - and gives them back after
+  four seconds of quiet. Both halves matter: keying it off keypresses alone leaves the
+  action keys dead for anyone playing with the mouse, which is a supported scheme for every
+  widget here. Every widget is sent every key main happens to be holding, so one with no use
+  for an action key must ignore it outright rather than read it as a hand arriving on the
+  keyboard - see Snake's `onKey`.
+
   A widget that draws its own controls gets `keyboard` in `WidgetOptions`, which is main's
   answer about whether the arrows will actually arrive - `wantsKeyboard()` and the user's
   `arrowKeys` setting, together. It defaults to false, so a widget that guesses instead of

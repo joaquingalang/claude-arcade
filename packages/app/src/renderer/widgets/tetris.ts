@@ -1,12 +1,14 @@
-import { CanvasWidget, type ArrowKey } from './types';
+import { CanvasWidget, type GameKey } from './types';
 
 /**
  * Tetris, on the arrow keys or on the mouse alone.
  *
  * Arrows are what this is actually played with, so it asks for them the way Snake does -
  * see `main/keyboard.ts` for what taking them off the desktop costs, and why the widget
- * has to keep working without them. Left and right walk a column, up turns, down is a
- * soft drop for as long as it is held.
+ * has to keep working without them. Left and right walk a column and sweep once the key
+ * is held, up turns, down is a soft drop for as long as it is held. Space slams the piece
+ * down where the ghost is, and C puts it by for later; those two are on a shorter lead
+ * than the arrows, because a desk toy that eats your space bar is not a desk toy.
  *
  * The mouse scheme is not a fallback bolted on afterwards; it is the one this was built
  * around and it stays complete. Moving is where the pointer is: the piece tracks the
@@ -37,8 +39,12 @@ const WELL_X = 0.045;
 const WELL_Y = 0.115;
 const PANEL_X = 0.63;
 const PANEL_W = 0.325;
-const NEXT_Y = 0.17;
+const NEXT_LABEL_Y = 0.128;
+const NEXT_Y = 0.16;
+const HOLD_LABEL_Y = 0.295;
+const HOLD_Y = 0.327;
 const NEXT_CELL = 0.036;
+const LABEL_SIZE = 0.032;
 const COUNT_Y = 0.5;
 const LEVEL_Y = 0.62;
 const BAR_Y = 0.71;
@@ -97,8 +103,21 @@ const SOFT_HOLD = 0.16;
 const STEER_STEP = 0.045;
 const AUTO_STEP = 0.075;
 
+/**
+ * What tells a held arrow from a tapped one, and what holding it is then worth.
+ *
+ * Fingers do not produce three presses this close together; the desktop's auto-repeat
+ * produces nothing else. The gap is set above the slowest repeat rate a machine is likely
+ * to be set to and below the fastest a hand can deliberately manage, so the two never get
+ * mistaken for one another - and the run has to reach {@link REPEAT_WARMUP} before
+ * anything changes, so a double tap is still worth exactly two columns.
+ */
+const REPEAT_GAP = 0.13;
+const REPEAT_WARMUP = 2;
+const REPEAT_COLUMNS = 2;
+
 /** How long the legend stays up at the start of a run, and how long it takes to go. */
-const GUIDE_SECONDS = 2.6;
+const GUIDE_SECONDS = 3;
 const GUIDE_FADE = 0.7;
 /** Where the legend sits: low, where the stack cannot have reached in its first breath. */
 const GUIDE_Y = 0.74;
@@ -191,6 +210,13 @@ export class Tetris extends CanvasWidget {
   private col = 0;
   private row = 0;
   private next = 0;
+  /** The piece put by for later, and whether this one has already been swapped out. */
+  private held: number | null = null;
+  private swapped = false;
+  /** Which way the last sideways press went, how long ago, and how long a run of them. */
+  private moveDir = 0;
+  private moveGap = 1;
+  private moveRun = 0;
   /** Where the autopilot means to put the piece, or null while a person is playing. */
   private plan: { rot: number; col: number } | null = null;
   private fallTimer = 0;
@@ -229,6 +255,11 @@ export class Tetris extends CanvasWidget {
     this.pressed = false;
     this.pressT = 0;
     this.softUntil = 0;
+    this.held = null;
+    this.swapped = false;
+    this.moveDir = 0;
+    this.moveGap = 1;
+    this.moveRun = 0;
     this.guide = GUIDE_SECONDS;
     this.clearing = [];
     this.overTimer = 0;
@@ -255,10 +286,21 @@ export class Tetris extends CanvasWidget {
   }
 
   private spawn(): void {
-    this.kind = this.next;
+    const kind = this.next;
     this.next = this.pull();
+    this.enter(kind);
+  }
+
+  /**
+   * Put a piece at the top of the well and start it falling.
+   *
+   * Split from `spawn` because the hold key is the one thing that brings a piece into
+   * play without taking one out of the queue - see `stash`.
+   */
+  private enter(kind: number): void {
+    this.kind = kind;
     this.rot = 0;
-    this.col = Math.floor((COLS - PIECES[this.kind]!.box) / 2);
+    this.col = Math.floor((COLS - PIECES[kind]!.box) / 2);
     this.row = 0;
     this.fallTimer = 0;
     this.lockTimer = LOCK_DELAY;
@@ -315,6 +357,10 @@ export class Tetris extends CanvasWidget {
   protected update(dt: number): void {
     if (this.pressed) this.pressT += dt;
     if (this.softUntil > 0) this.softUntil = Math.max(0, this.softUntil - dt);
+    // Capped rather than left to climb: all this is ever asked is whether the last
+    // sideways press was a moment ago, and a run left alone for a minute must not carry a
+    // number that says anything else.
+    this.moveGap = Math.min(this.moveGap + dt, 1);
     // Runs through every phase, so a legend is never left frozen on a finished board.
     if (this.guide > 0) this.guide = Math.max(0, this.guide - dt);
 
@@ -410,6 +456,9 @@ export class Tetris extends CanvasWidget {
   }
 
   private lock(): void {
+    // A piece landing is what buys the next swap, which is what stops the hold key being
+    // a way to keep putting the decision off - see `stash`.
+    this.swapped = false;
     for (const c of ROTATIONS[this.kind]![this.rot]!) {
       this.board[(this.row + c.y) * COLS + this.col + c.x] = this.kind;
     }
@@ -537,23 +586,52 @@ export class Tetris extends CanvasWidget {
   }
 
   /**
-   * An arrow key, forwarded from the main process's global accelerator.
+   * A key, forwarded from the main process's global accelerator.
    *
    * Taking the keyboard is itself the input, as in Snake: a press comes with "I am
    * driving now" attached whether or not it turns out to change anything, so the handover
    * happens before the key is looked at.
    */
-  override onKey(key: ArrowKey): void {
+  override onKey(key: GameKey): void {
     this.mode = 'keys';
     this.plan = null;
     this.pointerX = null;
     this.dismissGuide();
     if (this.phase !== 'play') return;
 
-    if (key === 'Left') this.shift(-1);
-    else if (key === 'Right') this.shift(1);
+    if (key === 'Left') this.walk(-1);
+    else if (key === 'Right') this.walk(1);
     else if (key === 'Up') this.spin();
+    else if (key === 'Drop') this.hardDrop();
+    else if (key === 'Hold') this.stash();
     else this.softDrop();
+  }
+
+  /**
+   * A press of left or right, worth more than a column once the key is being held.
+   *
+   * The accelerator only ever says "down", never "up", so this cannot run a slide of its
+   * own: a self-driven repeat would have to guess when the key was let go, and a guess
+   * that lands late walks the piece straight past the column you were aiming at. What it
+   * can do is tell a held key from a tapped one after the fact. Only auto-repeat delivers
+   * presses as close together as REPEAT_GAP, so once a run of them has arrived each press
+   * is worth REPEAT_COLUMNS instead of one - which is what turns a hold from a crawl at
+   * whatever rate that particular desk repeats at into a sweep across the well.
+   *
+   * The opening presses of a run are always worth exactly one column, and that is the part
+   * that makes this safe: nothing here ever moves the piece without a press behind it, so
+   * aiming is as exact as it ever was and only holding got quicker.
+   */
+  private walk(dx: number): void {
+    const held = this.moveDir === dx && this.moveGap <= REPEAT_GAP;
+    this.moveRun = held ? this.moveRun + 1 : 0;
+    this.moveDir = dx;
+    this.moveGap = 0;
+
+    const columns = this.moveRun >= REPEAT_WARMUP ? REPEAT_COLUMNS : 1;
+    // One column at a time even here, so a sweep still has to get past what is stacked
+    // rather than stepping over a wall it happened to straddle.
+    for (let i = 0; i < columns; i++) this.shift(dx);
   }
 
   /** A row now, and a moment of fast fall after it - see SOFT_HOLD. */
@@ -563,6 +641,44 @@ export class Tetris extends CanvasWidget {
     this.row++;
     // Zeroed so the row just taken by hand is not also charged to gravity.
     this.fallTimer = 0;
+  }
+
+  /**
+   * Straight down to where the ghost already is, and locked there.
+   *
+   * No lock delay afterwards, deliberately. The appeal of a hard drop is that the piece is
+   * *placed*, and a further fifth of a second of it sliding about on the floor is the
+   * thing you pressed the key to skip. It is also the one way to put a piece down before
+   * the fall has caught up with it, which is what makes the key worth having at all once
+   * the levels have climbed past the speed anybody can steer at.
+   */
+  private hardDrop(): void {
+    this.row = this.landing(this.rot, this.col);
+    this.fallTimer = 0;
+    // Whatever the down arrow still owed dies with the piece it was hurrying along, or a
+    // press from a moment ago would carry on hurrying the *next* one.
+    this.softUntil = 0;
+    this.lock();
+  }
+
+  /**
+   * Put the falling piece by, and bring back whatever was there.
+   *
+   * Once per piece, which is the rule everywhere else and is not an arbitrary one: two
+   * swaps with nothing in between is a way to sit on a piece and never have to place it,
+   * and against a fall that only ever gets quicker that is the single move that would let
+   * a run go on forever. Landing a piece is what buys the next swap - see `lock`.
+   *
+   * The first stash of a run has nothing to bring back, so it costs the piece in the
+   * queue, exactly as if the one being put away had landed.
+   */
+  private stash(): void {
+    if (this.swapped) return;
+    const stored = this.held;
+    this.held = this.kind;
+    this.swapped = true;
+    if (stored === null) this.spawn();
+    else this.enter(stored);
   }
 
   /**
@@ -696,14 +812,13 @@ export class Tetris extends CanvasWidget {
     ctx.fillRect(x + inset, y + inset, size - inset * 2, size * 0.16);
   }
 
-  private drawPanel(): void {
-    const ctx = this.ctx;
-    const centre = this.fx(PANEL_X + PANEL_W / 2);
+  /**
+   * A piece drawn small in the panel, centred on its own occupied width rather than on its
+   * box, so an L and an I both look placed rather than one of them looking dropped.
+   */
+  private drawMini(kind: number, centre: number, top: number, alpha = 1): void {
     const cell = NEXT_CELL * this.size;
-
-    // The next piece, centred in the panel on its own occupied width rather than its box,
-    // so an L and an I both look placed rather than one of them looking dropped.
-    const cells = ROTATIONS[this.next]![0]!;
+    const cells = ROTATIONS[kind]![0]!;
     let min = Infinity;
     let max = -Infinity;
     for (const c of cells) {
@@ -712,7 +827,34 @@ export class Tetris extends CanvasWidget {
     }
     const left = centre - ((max - min + 1) * cell) / 2 - min * cell;
     for (const c of cells) {
-      this.block(left + c.x * cell, this.fy(NEXT_Y) + c.y * cell, cell, PIECES[this.next]!.colour);
+      this.block(left + c.x * cell, top + c.y * cell, cell, PIECES[kind]!.colour, alpha);
+    }
+  }
+
+  private drawPanel(): void {
+    const ctx = this.ctx;
+    const centre = this.fx(PANEL_X + PANEL_W / 2);
+
+    // Two slots that would otherwise read as one piece sitting oddly high and another
+    // sitting oddly low, so each says which it is. The next piece went unlabelled for as
+    // long as it was the only thing here; a second slot is what makes the words earn the
+    // room they take, and a hold slot nobody can identify is a key nobody presses.
+    ctx.save();
+    ctx.shadowColor = 'rgba(15,23,42,0.85)';
+    ctx.shadowBlur = 6;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(148,163,184,0.72)';
+    ctx.font = `${Math.round(this.size * LABEL_SIZE)}px system-ui, sans-serif`;
+    ctx.fillText('next', centre, this.fy(NEXT_LABEL_Y));
+    ctx.fillText('hold', centre, this.fy(HOLD_LABEL_Y));
+    ctx.restore();
+
+    this.drawMini(this.next, centre, this.fy(NEXT_Y));
+    // Dimmed once it has been swapped in for this piece: the slot still has something in
+    // it, it just will not answer again until a piece has landed.
+    if (this.held !== null) {
+      this.drawMini(this.held, centre, this.fy(HOLD_Y), this.swapped ? 0.3 : 1);
     }
 
     ctx.save();
@@ -746,10 +888,11 @@ export class Tetris extends CanvasWidget {
    * The opening legend.
    *
    * Two schemes share this widget and neither is guessable from looking at it - nothing
-   * on a Tetris board says "hold the button to drop" - so a run opens by saying so and
-   * then gets out of the way. What it lists comes from `this.keyboard`, which is main's
-   * answer about the arrow grab rather than this widget's assumption: promising arrows to
-   * somebody who turned them off would be worse than saying nothing.
+   * on a Tetris board says "hold the button to drop", and nothing says which key puts a
+   * piece by - so a run opens by saying so and then gets out of the way. What it lists
+   * comes from `this.keyboard`, which is main's answer about the key grab rather than this
+   * widget's assumption: promising keys to somebody who turned them off would be worse
+   * than saying nothing.
    *
    * It sits low, over the part of the well a stack cannot have reached this early, so the
    * piece the legend is describing stays visible while it is read.
@@ -760,14 +903,22 @@ export class Tetris extends CanvasWidget {
     // Escaped rather than literal, because every other byte in this repo is ASCII:
     // left, right, up, down.
     const lines = this.keyboard
-      ? ['\u2190 \u2192 move   \u2191 turn   \u2193 drop', 'or point, tap, hold']
+      ? [
+          '\u2190 \u2192 move   \u2191 turn   \u2193 soft',
+          'space drop   c hold',
+          'or point, tap, hold',
+        ]
       : ['point to move   tap to turn', 'hold to drop'];
 
     const x = this.fx(0.5);
     const y = this.fy(GUIDE_Y);
     const w = this.size * 0.92;
-    const h = this.size * 0.155;
-    const lead = this.size * 0.055;
+    const lead = this.size * 0.052;
+    // Sized from the lines there are rather than fixed, because the keyboard has one the
+    // pointer does not, and a panel with a spare line of air under it reads as something
+    // that failed to finish drawing.
+    const h = lead * lines.length + this.size * 0.045;
+    const top = y - (lead * lines.length) / 2;
 
     ctx.save();
     // A plain panel rather than a rounded one: `roundRect` is newer than the oldest
@@ -777,13 +928,18 @@ export class Tetris extends CanvasWidget {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    ctx.fillStyle = `rgba(226,232,240,${0.95 * fade})`;
-    ctx.font = `600 ${Math.round(this.size * 0.05)}px system-ui, sans-serif`;
-    ctx.fillText(lines[0]!, x, y - lead / 2);
-
-    ctx.fillStyle = `rgba(148,163,184,${0.9 * fade})`;
-    ctx.font = `${Math.round(this.size * 0.042)}px system-ui, sans-serif`;
-    ctx.fillText(lines[1]!, x, y + lead / 2);
+    lines.forEach((line, i) => {
+      // The last line is the aside - the other scheme, or the mouse half of this one - and
+      // it is the only line here that is not something to press.
+      const aside = i === lines.length - 1;
+      ctx.fillStyle = aside
+        ? `rgba(148,163,184,${0.9 * fade})`
+        : `rgba(226,232,240,${0.95 * fade})`;
+      ctx.font = aside
+        ? `${Math.round(this.size * 0.042)}px system-ui, sans-serif`
+        : `600 ${Math.round(this.size * 0.046)}px system-ui, sans-serif`;
+      ctx.fillText(line, x, top + lead * (i + 0.5));
+    });
     ctx.restore();
   }
 

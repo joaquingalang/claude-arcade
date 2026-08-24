@@ -1,5 +1,15 @@
-/** The only keys the app ever takes from the rest of the desktop. */
+/** The keys the app takes from the rest of the desktop whenever a game asks for them. */
 export type ArrowKey = 'Up' | 'Down' | 'Left' | 'Right';
+/**
+ * The two it takes only while somebody is demonstrably mid-run.
+ *
+ * Named by what they do rather than by which key sends them: a widget has no business
+ * knowing that "put this piece by for later" is spelt C, and main has no business asking
+ * it to. See `main/keyboard.ts` for why these two are held on a much shorter lead than
+ * the arrows are.
+ */
+export type ActionKey = 'Drop' | 'Hold';
+export type GameKey = ArrowKey | ActionKey;
 
 export interface WidgetOptions {
   /** CSS pixel width of the canvas. Rendering must stay inside this box. */
@@ -160,11 +170,15 @@ export abstract class CanvasWidget implements Widget {
   onPointerUp(_x: number, _y: number): void {}
 
   /**
-   * A direction key, forwarded from the main process.
+   * A game key, forwarded from the main process.
    *
    * The window is `focusable: false`, so it never receives a keydown of its own. These
    * arrive from a global accelerator that main registers only while a widget that wants
    * keys is on screen - see `main/keyboard.ts` for what that costs.
+   *
+   * A widget is sent every key main is holding, not only the ones it uses, so one that
+   * has no use for an `ActionKey` must ignore it outright rather than treat it as a hand
+   * arriving on the keyboard.
    */
-  onKey(_key: ArrowKey): void {}
+  onKey(_key: GameKey): void {}
 }

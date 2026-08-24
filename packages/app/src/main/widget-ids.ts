@@ -42,6 +42,21 @@ export function wantsKeyboard(id: string): boolean {
   return id === 'snake' || id === 'tetris';
 }
 
+/**
+ * Widgets that want more than the arrows: a key to slam a piece down, and one to put it
+ * by for later.
+ *
+ * Shorter still than `wantsKeyboard`, and it has to be. An arrow taken from the desktop
+ * costs you shell history; a space bar taken from the desktop costs you the ability to
+ * type, which is not a trade any toy gets to make on its own. What makes it payable is
+ * that these two are only ever grabbed while somebody is *demonstrably playing* - see
+ * `KeyboardBridge`, which arms them on an arrow press and hands them back the moment the
+ * playing stops.
+ */
+export function wantsActionKeys(id: string): boolean {
+  return id === 'tetris';
+}
+
 /** The longest a widget may keep the cycle waiting, however busy it says it is. */
 export const HOLD_CAP_MS = 90_000;
 /** How soon a deferred swap looks again. Short: the wait should end when the player does. */
@@ -92,6 +107,9 @@ export class CycleHold {
  * mirrors the registry: main must not import renderer code.
  */
 export type ArrowKey = 'Up' | 'Down' | 'Left' | 'Right';
+/** The two extra keys, named by what they do rather than by which key sends them. */
+export type ActionKey = 'Drop' | 'Hold';
+export type GameKey = ArrowKey | ActionKey;
 
 export interface WidgetBounds {
   width: number;
