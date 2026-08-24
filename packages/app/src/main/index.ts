@@ -335,6 +335,14 @@ async function bootstrap(): Promise<void> {
 }
 
 app.whenReady().then(() => {
+  // macOS hands every app a Dock icon and a Cmd+Tab slot. This one has earned neither:
+  // there is no window to raise, no menu bar worth reaching, and it is started by a CLI
+  // wrapper rather than by somebody opening it - so the icon is a bouncing advert for a
+  // process the user never launched, and Cmd+Tabbing to it does nothing at all. Hiding
+  // it makes this an accessory app, which is what `skipTaskbar` has quietly been doing
+  // on Windows all along; macOS ignores that option and wants this instead.
+  app.dock?.hide();
+
   ipcMain.on('arcade:drag-start', (_e, offset: { x: number; y: number }) => {
     widgetWindow?.beginDrag(offset);
   });

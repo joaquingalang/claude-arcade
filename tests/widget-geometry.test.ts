@@ -14,7 +14,13 @@ import { Simon } from '../packages/app/src/renderer/widgets/simon';
 import { Snake } from '../packages/app/src/renderer/widgets/snake';
 import { SpaceInvaders } from '../packages/app/src/renderer/widgets/space-invaders';
 import { Suika } from '../packages/app/src/renderer/widgets/suika';
-import { placeWidget, widgetBounds } from '../packages/app/src/main/widget-ids';
+import {
+  SCREEN_MARGIN,
+  bottomClearance,
+  defaultAnchor,
+  placeWidget,
+  widgetBounds,
+} from '../packages/app/src/main/widget-ids';
 import type { CanvasWidget } from '../packages/app/src/renderer/widgets/types';
 
 const SIZE = 280;
@@ -325,5 +331,59 @@ describe('window placement', () => {
   it('clamps to the work area origin, not to zero', () => {
     const shifted = { x: 100, y: 60, width: 800, height: 600 };
     expect(placeWidget({ x: -50, y: -50 }, square, shifted)).toEqual({ x: 100, y: 60 });
+  });
+});
+
+/**
+ * The corner the toy starts in, on a desk nobody has dragged it around yet.
+ *
+ * Worth its own tests because it is the one piece of geometry that differs by platform,
+ * and the difference is invisible to whoever wrote it: a Windows developer cannot see a
+ * toy floating above the Dock, and a mac developer cannot see one swallowed by a taskbar.
+ */
+describe('default position', () => {
+  const square = widgetBounds('bubble-wrap');
+  const PRIMARY = { x: 0, y: 0, width: 1920, height: 1040 };
+
+  it('sits a margin in from the bottom-right of the work area', () => {
+    const { x, y } = defaultAnchor(PRIMARY, 'darwin');
+    expect(x).toBe(PRIMARY.width - square.width - SCREEN_MARGIN);
+    expect(y).toBe(PRIMARY.height - square.height - SCREEN_MARGIN);
+  });
+
+  // An auto-hiding taskbar is not subtracted from workArea, so Windows - and only
+  // Windows - buys clearance for a bar that may slide out over the corner.
+  it('keeps clear of a Windows taskbar that workArea does not account for', () => {
+    const win = defaultAnchor(PRIMARY, 'win32');
+    const mac = defaultAnchor(PRIMARY, 'darwin');
+    expect(mac.y - win.y).toBe(bottomClearance('win32'));
+    expect(bottomClearance('win32')).toBeGreaterThan(0);
+  });
+
+  // The bug this was extracted to fix: macOS already insets workArea for the Dock and
+  // the menu bar, so a Windows allowance on top of it parks the toy in mid-air.
+  it('adds nothing below the toy on macOS or Linux, where workArea is already inset', () => {
+    expect(bottomClearance('darwin')).toBe(0);
+    expect(bottomClearance('linux')).toBe(0);
+  });
+
+  // A second monitor's work area has its own origin, and the default corner has to be
+  // that display's corner rather than the primary one's.
+  it('anchors to the given work area, not to the screen origin', () => {
+    const left = { x: -1920, y: -120, width: 1920, height: 1080 };
+    const { x, y } = defaultAnchor(left, 'darwin');
+    expect(x).toBe(left.x + left.width - square.width - SCREEN_MARGIN);
+    expect(y).toBe(left.y + left.height - square.height - SCREEN_MARGIN);
+  });
+
+  // Whatever the platform, the box the anchor describes has to fit on the display.
+  it('leaves the toy fully on screen on every platform', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      const anchor = defaultAnchor(PRIMARY, platform);
+      const placed = placeWidget(anchor, square, PRIMARY);
+      expect(placed).toEqual(anchor);
+      expect(anchor.x + square.width).toBeLessThanOrEqual(PRIMARY.width);
+      expect(anchor.y + square.height).toBeLessThanOrEqual(PRIMARY.height);
+    }
   });
 });

@@ -126,6 +126,46 @@ export interface WorkArea {
   height: number;
 }
 
+/** Breathing room between the toy and the edges of the work area. */
+export const SCREEN_MARGIN = 24;
+
+/**
+ * Extra clearance above the bottom edge, and why only Windows gets any.
+ *
+ * An auto-hiding taskbar is not excluded from `workArea` - Windows reports the full
+ * height and the bar slides out over whatever is sitting there, so the bottom-right
+ * corner is the one spot on that platform where a toy can be swallowed by the OS.
+ * macOS and Linux need nothing: `workArea` is already inset by the Dock, the menu bar or
+ * the panel, so subtracting a Windows taskbar on top of that just parks the toy a
+ * visible gap above the corner it is meant to sit in.
+ */
+export function bottomClearance(platform: NodeJS.Platform = process.platform): number {
+  return platform === 'win32' ? 56 : 0;
+}
+
+/**
+ * Where the toy sits before anybody has dragged it: the bottom-right of the work area.
+ *
+ * Pure, and given the work area rather than asking `screen` for it, for the same reason
+ * `placeWidget` is - a platform inset below the toy is the kind of thing that is wrong on
+ * somebody else's desk for months before anyone notices, and a function that can be
+ * called with a fake display is a function a test can hold to account.
+ */
+export function defaultAnchor(
+  workArea: WorkArea,
+  platform: NodeJS.Platform = process.platform,
+): { x: number; y: number } {
+  return {
+    x: workArea.x + workArea.width - WIDGET_BASE_SIZE - SCREEN_MARGIN,
+    y:
+      workArea.y +
+      workArea.height -
+      WIDGET_BASE_SIZE -
+      SCREEN_MARGIN -
+      bottomClearance(platform),
+  };
+}
+
 /**
  * Where the window goes, given where the user parked the base square.
  *

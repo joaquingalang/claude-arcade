@@ -15,8 +15,11 @@ npm run build
 npm run link   # optional: builds, then puts `arcade` on your PATH
 ```
 
-Node 18+. The repo is an npm workspace with three packages, so install and build at the
-root - `npm install` inside a package will not do what you want.
+Node 22.12+, which is what `electron@43` declares. Older versions install and run - npm
+only warns unless `engine-strict` is set - but the warning is `EBADENGINE` on every
+install, and a machine that does set it cannot install this repo at all. The repo is an
+npm workspace with three packages, so install and build at the root - `npm install`
+inside a package will not do what you want.
 
 `npm run link` symlinks the `@claude-arcade/cli` workspace into npm's global prefix, so
 `arcade` runs this checkout from any directory. It resolves the Electron app by walking up
@@ -24,7 +27,10 @@ from its own `__dirname`, which survives the symlink - move the repo and it brea
 re-running `npm run link` from the new location fixes it. `npm run unlink` removes it.
 
 On Windows, PowerShell will refuse to run the linked `arcade.ps1` shim under the default
-`Restricted` execution policy. The README has the fix; `arcade.cmd` works either way.
+`Restricted` execution policy. The README has the fix; `arcade.cmd` works either way. On
+macOS the counterpart is `npm link` hitting `EACCES` against a `/usr/local` prefix your
+account does not own - also in the README, and the fix is a prefix in `$HOME`, never
+`sudo`.
 
 The day-to-day loop:
 
@@ -35,7 +41,7 @@ npm run build                # shared + cli (tsc) and app (vite + tsc)
 ARCADE_DEBUG=1 npm run app   # just the Electron app, renderer logs to stderr
 ```
 
-`npm test` currently runs 476 tests across 10 files in about three seconds. Keep it that
+`npm test` currently runs 534 tests across 10 files in about three seconds. Keep it that
 fast; these tests are meant to be run constantly, so nothing in `tests/` should sleep, bind
 a port, or launch Electron.
 

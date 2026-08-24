@@ -1,10 +1,12 @@
 import { BrowserWindow, screen } from 'electron';
 
-import { WIDGET_BASE_SIZE, placeWidget, widgetBounds, type WidgetBounds } from './widget-ids';
-
-const SCREEN_MARGIN = 24;
-/** Roughly the Windows taskbar, so the default position doesn't sit under it. */
-const TASKBAR_ALLOWANCE = 56;
+import {
+  WIDGET_BASE_SIZE,
+  defaultAnchor,
+  placeWidget,
+  widgetBounds,
+  type WidgetBounds,
+} from './widget-ids';
 
 export class WidgetWindow {
   private win: BrowserWindow | null = null;
@@ -100,11 +102,7 @@ export class WidgetWindow {
 
   /** Bottom-right of the work area, expressed as the base square's corner. */
   private defaultPosition(): { x: number; y: number } {
-    const { workArea } = screen.getPrimaryDisplay();
-    return {
-      x: workArea.x + workArea.width - WIDGET_BASE_SIZE - SCREEN_MARGIN,
-      y: workArea.y + workArea.height - WIDGET_BASE_SIZE - SCREEN_MARGIN - TASKBAR_ALLOWANCE,
-    };
+    return defaultAnchor(screen.getPrimaryDisplay().workArea);
   }
 
   /**

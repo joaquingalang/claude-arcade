@@ -17,10 +17,14 @@ you: "refactor the auth module"
 
 | | |
 |---|---|
-| Node | 18 or newer (`node --version`) |
+| Node | 22.12 or newer (`node --version`) - Electron 43 asks for it |
 | Claude Code | already installed and working - `claude --version` must answer |
 | Desktop session | the widget is an Electron window, so it needs a screen to draw into |
 | OS | Windows, macOS or Linux |
+
+An older Node still installs and runs - npm only warns about `engines` unless
+`engine-strict` is set - but you will see `EBADENGINE` on every install, and a machine
+that does set it will refuse the install outright.
 
 `arcade` only wraps a `claude` it can find, so get `claude --version` answering before you
 start. Over plain SSH or in a container with no display there is nothing to show; the CLI
@@ -168,6 +172,42 @@ the arguments into one string, and cmd does not know a `\"` from a `"` - it eats
 in the injected `--settings` JSON and splits a prompt like `fix A & B` at the ampersand.
 Handing cmd its arguments as separate argv entries keeps Node's own quoting, and the whole
 2KB payload reaches Claude byte for byte.
+
+### macOS
+
+There is no execution-policy equivalent to work around: the `arcade` npm writes into your
+global bin is an ordinary symlink, and it runs. Two things are still worth knowing.
+
+**`npm link` can stop with `EACCES`.** Node from the installer at nodejs.org puts npm's
+global prefix in `/usr/local`, which your account does not own, so `npm run link` fails on
+permissions. Do not reach for `sudo` - it leaves root-owned files in a directory npm has
+to keep writing to, and the next ordinary `npm install -g` fails for the same reason with
+a stranger error. Give npm a prefix inside your home directory instead:
+
+```bash
+npm config set prefix ~/.npm-global
+echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc
+exec zsh
+npm run link
+```
+
+Node from Homebrew already installs into a prefix you own, so this never comes up there.
+
+**On nvm and fnm**, the global directory lives inside the active Node version, so
+switching versions makes `arcade` vanish - the same thing nvm4windows does, with the same
+repair: re-run `npm run link` under the version you want to use it from.
+
+**Nothing appears in the Dock**, and nothing in Cmd+Tab. That is deliberate: the app is
+started by the wrapper rather than opened by you, and it has no window to raise or menu
+worth reaching, so it runs as an accessory and its only visible form is the toy itself.
+`arcade doctor` - which prints the same lines with `/Users/you/...` paths - is how you ask
+whether it is running.
+
+**Snake and Tetris ask for the arrow keys** while they are on screen, exactly the trade
+described under [The arrow keys](#the-arrow-keys). Asking is best-effort: if macOS or
+another app already holds one of the four, the widget simply does not get that key and
+pointer steering carries the game. That is the reason both are complete under the pointer
+rather than a consolation for when it fails.
 
 ## Widgets
 
@@ -408,7 +448,7 @@ tests/      vitest, run against source
 ## Development
 
 ```bash
-npm test                  # 529 tests across 10 files
+npm test                  # 534 tests across 10 files
 npm run typecheck
 npm run build
 npm run link                 # rebuild and refresh the global `arcade` command
