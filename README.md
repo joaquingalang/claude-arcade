@@ -228,9 +228,10 @@ third touch spends the run. The wait ends on its own if you leave either of them
 `cycleMs` like every other one: this is for a person mid-something, not a way for a toy to
 promote itself to a game.
 
-Hovering reveals a dismiss button in the top-right corner. Dismissing hides the toy for
-the rest of the current stretch of work; the next turn brings it back. It is a "not now",
-not an off switch. A strip along the top edge drags the window, and where you drop it is
+Hovering reveals a dismiss button in the top-right corner. Dismissing hides the toy until
+your next prompt, and nothing before then brings it back - not the turn ending, not a
+permission prompt in the middle of it, not the next tool call. It is a "not now", not an
+off switch. A strip along the top edge drags the window, and where you drop it is
 remembered - including which monitor you left it on.
 
 ### Playing one on purpose
@@ -261,11 +262,12 @@ beeps while you are on a call is a toy you uninstall. Turn it on with
 `"soundEnabled": true` in `config.json`; the flag is read on every appearance, so the edit
 lands on the next show rather than the next launch.
 
-Five widgets make a noise. **Bubble wrap plays samples** - four files named `pop-1.mp3`
+Six widgets make a noise. **Bubble wrap plays samples** - four files named `pop-1.mp3`
 through `pop-4.mp3` in `packages/app/src/renderer/public/sounds/` (see the README there for
 what makes a good one). Missing files are not an error; an install with no samples pops
-silently. **The Tower of Hanoi, thumb piano, buzz wire and Simon synthesise**, so they are
-audible the moment sound is switched on with nothing to download.
+silently. **The Tower of Hanoi, thumb piano, buzz wire, Simon and Connect Four
+synthesise**, so they are audible the moment sound is switched on with nothing to
+download.
 
 Sound never carries information the picture doesn't - Simon's four pitches duplicate its
 four colours rather than replacing them - so every widget is fully playable with sound off.
@@ -369,6 +371,14 @@ CLI holds the same line - `ensureApp()` returning null means "run Claude unwrapp
 | `PostToolUseFailure` | done | hide |
 | `SessionEnd` | dropped | hide |
 
+`UserPromptSubmit` is the only row that starts a turn. Every other row reads "while a turn
+is under way" - they pause it, resume it or end it, and on a session that is `idle` or
+`done` they do nothing at all. That is not a detail: hooks are fire-and-forget, so the
+tail of a turn arrives out of order, and a `PostToolUse` or an idle `Notification` landing
+after its own `Stop` would otherwise put the toy back on screen seconds after Claude went
+quiet. `stop_hook_active` is no exception - it keeps a live turn alive, but it rides the
+`Stop` that *closes* a hook-resumed stretch, so it can never reopen a finished one.
+
 The 2.5s delay is the anti-flicker guarantee: a turn that finishes in under 2.5s never
 shows anything. The clock starts at the first event of the turn and survives tool calls,
 so a long turn full of tool activity doesn't keep pushing the appearance back.
@@ -398,7 +408,7 @@ tests/      vitest, run against source
 ## Development
 
 ```bash
-npm test                  # 333 tests across 9 files
+npm test                  # 529 tests across 10 files
 npm run typecheck
 npm run build
 npm run link                 # rebuild and refresh the global `arcade` command

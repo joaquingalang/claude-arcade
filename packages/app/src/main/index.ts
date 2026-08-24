@@ -59,8 +59,22 @@ const hold = new CycleHold();
  * board rather than a no-op.
  */
 let generation = 0;
-/** The user waved this appearance away. Cleared as soon as the work stops. */
-let dismissed = false;
+/**
+ * The prompt count when the user waved the widget away, or null if they never have.
+ *
+ * Dated rather than a flag, because the question "is this dismissal still in force?" has
+ * to survive everything that happens between the click and the next prompt: the turn
+ * ending, a lull while Claude waits on the user, stray hook events arriving late. Any of
+ * those clearing a plain boolean is a widget springing back onto a desktop someone just
+ * closed it on. Only a new prompt moves the count, so only a new prompt lets it back.
+ */
+let dismissedAtPrompt: number | null = null;
+
+/** True while the user's dismissal still covers the current stretch of work. */
+function isDismissed(): boolean {
+  return dismissedAtPrompt !== null && dismissedAtPrompt === sessions.promptCount();
+}
+
 /**
  * A widget the user asked for by name with `arcade play`, or null for the usual behaviour.
  *
@@ -193,7 +207,7 @@ function startPlaying(id: string): void {
   handPicked = id;
   // A dismissal covers one stretch of work. It must never swallow a request made after
   // it - typing `arcade play snake` and getting nothing would read as a broken command.
-  dismissed = false;
+  dismissedAtPrompt = null;
   clearShowTimer();
   stopCycle();
   hold.clear();
@@ -230,12 +244,9 @@ function reconcile(): void {
   // A hand-picked widget answers to `arcade stop` and the dismiss button, not to Claude.
   if (handPicked !== null) return;
 
-  const wantVisible = sessions.shouldShowWidget();
-  // A dismissal covers this stretch of work only. Once everything goes quiet the next
-  // turn starts clean, so waving the toy away never feels like turning it off for good.
-  if (!wantVisible) dismissed = false;
+  const wantVisible = sessions.shouldShowWidget() && !isDismissed();
 
-  if (wantVisible && !dismissed) {
+  if (wantVisible) {
     if (!widgetWindow.isVisible()) {
       currentWidgetId = rotation.next(config.get().widget);
       generation++;
@@ -256,8 +267,9 @@ function reconcile(): void {
   syncKeyboard();
 
   // Still working, just unwanted. Scheduling here would spin: the delay has already
-  // elapsed, so msUntilNextShow() returns 0 and we'd re-enter every 10ms.
-  if (dismissed) return;
+  // elapsed, so msUntilNextShow() returns 0 and we'd re-enter every 10ms. The next
+  // prompt calls reconcile() again anyway, which is exactly when this expires.
+  if (isDismissed()) return;
 
   // Something is working but hasn't crossed the delay yet - wake up when it does.
   const wait = sessions.msUntilNextShow();
@@ -335,7 +347,7 @@ app.whenReady().then(() => {
     widgetWindow?.endDrag();
   });
   ipcMain.on('arcade:dismiss', () => {
-    dismissed = true;
+    dismissedAtPrompt = sessions.promptCount();
     // The X means "away, now", whoever put the widget there. Clearing this is what stops
     // a hand-picked widget from springing straight back at the next hook event.
     handPicked = null;

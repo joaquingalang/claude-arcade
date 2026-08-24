@@ -195,6 +195,12 @@ table. Three rules it encodes:
   asking the user something; a toy covering the prompt is actively harmful.
 - **Not every `Stop` is a completion.** `stop_hook_active` means a Stop hook itself
   continued the turn.
+- **Only `UserPromptSubmit` starts a turn.** Everything else acts on a turn already under
+  way and is ignored on an `idle` or `done` session. The hooks are async, so the tail of a
+  turn lands after the `Stop` that ended it; anything that can promote a straggler to work
+  is a widget that reappears on a quiet desktop. `promptCount()` is the other half of the
+  same rule - the dismiss button is dated against it, so a dismissal lasts exactly until
+  the next prompt.
 
 Subscribing to a new event means adding it to `SUBSCRIBED_EVENTS` in
 `packages/shared/src/protocol.ts` (the CLI builds one HTTP hook per entry) and handling

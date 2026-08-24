@@ -238,3 +238,125 @@ describe('launcher lifecycle', () => {
     expect(store.size()).toBe(0);
   });
 });
+
+/**
+ * The hooks are async and fire-and-forget, so the tail end of a turn does not arrive in
+ * order: a PostToolUse, a subagent's Stop or an idle Notification can all land after the
+ * Stop that ended the turn. Every one of these used to start a new turn, and the widget
+ * came back seconds after Claude had gone quiet.
+ */
+describe('a finished turn stays finished', () => {
+  const strays = [
+    'PreToolUse',
+    'PostToolUse',
+    'PostToolBatch',
+    'SubagentStart',
+    'SubagentStop',
+    'PostCompact',
+    'Notification',
+    'PermissionRequest',
+    'Elicitation',
+    'Stop',
+    'StopFailure',
+    'PostToolUseFailure',
+  ];
+
+  for (const event of strays) {
+    it(`a late ${event} does not reopen the turn`, () => {
+      const { store, advance } = makeStore({ showDelayMs: 2500 });
+      store.apply(ev('UserPromptSubmit'));
+      advance(3000);
+      store.apply(ev('Stop'));
+      expect(store.shouldShowWidget()).toBe(false);
+
+      store.apply(ev(event));
+      expect(store.stateOf('s1')).toBe('done');
+      advance(60_000);
+      expect(store.shouldShowWidget()).toBe(false);
+      expect(store.msUntilNextShow()).toBeNull();
+    });
+  }
+
+  it('a stray tool event for an unknown session never starts a turn', () => {
+    const { store, advance } = makeStore({ showDelayMs: 2500 });
+    // The reaper drops finished sessions, so a straggler that arrives after that sweep
+    // lands on no session at all - and must not conjure a working one out of nothing.
+    store.apply(ev('PostToolUse'));
+    advance(60_000);
+    expect(store.stateOf('s1')).toBe('idle');
+    expect(store.shouldShowWidget()).toBe(false);
+  });
+
+  it('a stop_hook_active Stop keeps a live turn alive but cannot revive a dead one', () => {
+    const { store, advance } = makeStore({ showDelayMs: 2500 });
+    store.apply(ev('UserPromptSubmit'));
+    advance(3000);
+    store.apply(ev('Stop'));
+    // The flag rides the Stop that closes a hook-resumed stretch, so honouring it here
+    // would raise the widget at the exact moment Claude stopped for good.
+    store.apply(ev('Stop', { stop_hook_active: true }));
+    expect(store.stateOf('s1')).toBe('done');
+    expect(store.shouldShowWidget()).toBe(false);
+  });
+
+  it('the next prompt starts a clean turn', () => {
+    const { store, advance } = makeStore({ showDelayMs: 2500 });
+    store.apply(ev('UserPromptSubmit'));
+    advance(3000);
+    store.apply(ev('Stop'));
+    store.apply(ev('PostToolUse'));
+
+    store.apply(ev('UserPromptSubmit'));
+    expect(store.stateOf('s1')).toBe('working');
+    advance(2500);
+    expect(store.shouldShowWidget()).toBe(true);
+  });
+
+  it('still resumes when the user answers a permission prompt', () => {
+    const { store, advance } = makeStore({ showDelayMs: 2500 });
+    store.apply(ev('UserPromptSubmit'));
+    advance(3000);
+    store.apply(ev('PermissionRequest'));
+    expect(store.shouldShowWidget()).toBe(false);
+
+    // Approving one is not a new prompt, so the turn has to pick itself back up here or
+    // the widget would be gone for the rest of a long turn.
+    store.apply(ev('PostToolUse'));
+    expect(store.stateOf('s1')).toBe('working');
+    advance(2500);
+    expect(store.shouldShowWidget()).toBe(true);
+  });
+});
+
+/** What the app dates a dismissal against - see `dismissedAtPrompt` in main/index.ts. */
+describe('promptCount', () => {
+  it('counts prompts and nothing else', () => {
+    const { store } = makeStore();
+    expect(store.promptCount()).toBe(0);
+
+    store.apply(ev('UserPromptSubmit'));
+    store.apply(ev('PreToolUse'));
+    store.apply(ev('Stop'));
+    store.apply(ev('PostToolUse'));
+    expect(store.promptCount()).toBe(1);
+
+    store.apply(ev('UserPromptSubmit'));
+    expect(store.promptCount()).toBe(2);
+  });
+
+  it('counts prompts from every session, since one widget serves them all', () => {
+    const { store } = makeStore();
+    store.apply({ session_id: 'a', hook_event_name: 'UserPromptSubmit' });
+    store.apply({ session_id: 'b', hook_event_name: 'UserPromptSubmit' });
+    expect(store.promptCount()).toBe(2);
+  });
+
+  it('survives the session it counted being reaped', () => {
+    const { store } = makeStore();
+    store.apply(ev('UserPromptSubmit'));
+    store.apply(ev('Stop'));
+    store.reap();
+    expect(store.size()).toBe(0);
+    expect(store.promptCount()).toBe(1);
+  });
+});

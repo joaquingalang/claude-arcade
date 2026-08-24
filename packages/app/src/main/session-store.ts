@@ -29,6 +29,8 @@ export class SessionStore {
   private readonly isAlive: (pid: number) => boolean;
   /** Registrations arrive from the CLI before the session_id exists; queued here. */
   private pendingLaunchers: Array<{ pid: number; cwd: string; token: string }> = [];
+  /** Prompts seen across all sessions. See promptCount(). */
+  private prompts = 0;
 
   constructor(options: SessionStoreOptions = {}) {
     this.showDelayMs = options.showDelayMs ?? 2500;
@@ -58,24 +60,38 @@ export class SessionStore {
     session.lastEventAt = t;
     if (payload.cwd) session.cwd = payload.cwd;
 
+    /**
+     * Whether a turn is under way right now.
+     *
+     * Only a prompt starts one. Every other event may pause, resume or end a turn
+     * already running, and none of them may begin one - which is what keeps a finished
+     * turn finished. The hooks are async and fire-and-forget, so the tail of a turn
+     * (a PostToolUse, a Notification, a subagent's Stop) routinely lands after the Stop
+     * that ended it; treating one of those as work is what made the widget reappear
+     * seconds after Claude went quiet.
+     */
+    const inTurn = session.state === 'working' || session.state === 'needs-user';
+
     switch (event) {
       case 'UserPromptSubmit':
+        // Counted, not just applied: a dismissed widget is allowed back at the next
+        // prompt and nowhere else, and this is how the app dates that dismissal.
+        this.prompts++;
         this.enterWorking(session, t);
         break;
 
-      // Tool activity and subagents are proof of life, not state changes.
+      // Tool activity and subagents are proof of life, not state changes. They lift the
+      // pause a Notification put the turn in; on a turn already working they only push
+      // the watchdog out, since enterWorking keeps the original start time.
       case 'PreToolUse':
       case 'PostToolUse':
       case 'PostToolBatch':
       case 'SubagentStart':
       case 'SubagentStop':
-        if (session.state !== 'working') this.enterWorking(session, t);
-        break;
-
       // Auto-compaction happens mid-turn and work resumes right after. Treating this
       // as completion would hide the widget precisely during a long turn.
       case 'PostCompact':
-        if (session.state !== 'working') this.enterWorking(session, t);
+        if (inTurn) this.enterWorking(session, t);
         break;
 
       // Claude is asking the user something. A toy covering the prompt is actively
@@ -83,24 +99,24 @@ export class SessionStore {
       case 'Notification':
       case 'PermissionRequest':
       case 'Elicitation':
+        if (!inTurn) break;
         session.state = 'needs-user';
         session.workingSince = null;
         break;
 
       case 'Stop':
       case 'StopFailure':
-        // A Stop hook that itself resumed the model: the turn is not over.
-        if (payload.stop_hook_active) {
-          this.enterWorking(session, t);
-        } else {
-          session.state = 'done';
-          session.workingSince = null;
-        }
+        if (!inTurn) break;
+        // A Stop hook that itself resumed the model: the turn is not over. It keeps a
+        // running turn running; it cannot reopen one that has already ended, because
+        // this flag arrives on the Stop that *closes* the resumed stretch - honouring
+        // it there would put the widget up just as Claude stopped for good.
+        if (payload.stop_hook_active) this.enterWorking(session, t);
+        else this.endTurn(session);
         break;
 
       case 'PostToolUseFailure':
-        session.state = 'done';
-        session.workingSince = null;
+        if (inTurn) this.endTurn(session);
         break;
 
       case 'SessionEnd':
@@ -135,6 +151,12 @@ export class SessionStore {
       launcherPid: launcher?.pid,
       launcherToken: launcher?.token ?? token,
     };
+  }
+
+  /** The turn is over. Nothing but a new prompt may start another one. */
+  private endTurn(session: SessionInfo): void {
+    session.state = 'done';
+    session.workingSince = null;
   }
 
   private enterWorking(session: SessionInfo, t: number): void {
@@ -198,6 +220,19 @@ export class SessionStore {
 
   stateOf(sessionId: string): SessionState | undefined {
     return this.sessions.get(sessionId)?.state;
+  }
+
+  /**
+   * How many prompts have been submitted, across every session, since the app started.
+   *
+   * A monotonic stamp for "this stretch of work", which is the unit a dismissal covers:
+   * the app records the count when the user closes the widget and shows it again only
+   * once the count has moved on. Deliberately not per session - the widget is shared, so
+   * closing it is a statement about the desktop, and any session prompting again is a
+   * new stretch of work.
+   */
+  promptCount(): number {
+    return this.prompts;
   }
 
   size(): number {
